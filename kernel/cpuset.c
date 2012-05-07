@@ -1286,6 +1286,14 @@ static void update_cpu_nohz_flag(int cpu, int adjust)
 	}
 }
 
+
+static bool all_cpus_nohz_flag = false;
+
+bool all_cpus_nohz(void)
+{
+	return all_cpus_nohz_flag;
+}
+
 static void update_nohz_flag(struct cpuset *old_cs, struct cpuset *cs)
 {
 	int cpu;
@@ -1298,6 +1306,8 @@ static void update_nohz_flag(struct cpuset *old_cs, struct cpuset *cs)
 	for_each_cpu(cpu, cs->cpus_allowed) {
 		update_cpu_nohz_flag(cpu, adjust);
 	}
+
+	all_cpus_nohz_flag = cpumask_equal(cpu_online_mask, &nohz_cpuset_mask);
 }
 
 static void update_nohz_cpus(struct cpuset *old_cs, struct cpuset *cs)
@@ -1316,6 +1326,8 @@ static void update_nohz_cpus(struct cpuset *old_cs, struct cpuset *cs)
 	for_each_cpu(cpu, &cpus)
 		update_cpu_nohz_flag(cpu,
 			cpumask_test_cpu(cpu, cs->cpus_allowed) ? 1 : -1);
+
+	all_cpus_nohz_flag = cpumask_equal(cpu_online_mask, &nohz_cpuset_mask);
 }
 #else
 static inline void update_nohz_flag(struct cpuset *old_cs, struct cpuset *cs)

@@ -509,6 +509,8 @@ void tick_nohz_idle_enter(void)
 }
 
 #ifdef CONFIG_CPUSETS_NO_HZ
+extern bool all_cpus_nohz();
+
 static bool can_stop_adaptive_tick(void)
 {
 	if (!sched_can_stop_tick())
@@ -995,7 +997,12 @@ static void tick_do_timer_check_handler(int cpu)
 	int handler = tick_do_timer_cpu;
 
 	if (unlikely(handler == TICK_DO_TIMER_NONE)) {
-		tick_do_timer_cpu = cpu;
+		/*
+		 * Ensure we can see these values immediately.
+		 * Put necessary barriers.
+		 */
+		if(all_cpus_nohz() || !cpuset_adaptive_nohz())
+			tick_do_timer_cpu = cpu;
 	} else {
 		if (!cpuset_adaptive_nohz() &&
 		    cpuset_cpu_adaptive_nohz(handler))
