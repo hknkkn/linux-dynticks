@@ -25,6 +25,8 @@
 
 #include "tick-internal.h"
 
+ktime_set(0, NSEC_PER_SEC / HZ);
+
 /*
  * Per cpu nohz control structure
  */

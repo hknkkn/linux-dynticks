@@ -64,9 +64,35 @@ static ssize_t __ref store_online(struct device *dev,
 }
 static DEVICE_ATTR(online, 0644, show_online, store_online);
 
+extern DEFINE_PER_CPU(ktime_t, cpu_tick_period);
+
+static ssize_t show_tp(struct device *dev,
+			   struct device_attribute *attr,
+			   char *buf)
+{
+	struct cpu *cpu = container_of(dev, struct cpu, dev);
+
+	return sprintf(buf, "%lld\n", per_cpu(cpu_tick_period, cpu->dev.id).tv64);
+}
+
+static ssize_t __ref store_tp(struct device *dev,
+				  struct device_attribute *attr,
+				  const char *buf, size_t count)
+{
+	struct cpu *cpu = container_of(dev, struct cpu, dev);
+
+	ktime_t val;
+	sscanf(buf, "%lld", &val.tv64);
+	per_cpu(cpu_tick_period, cpu->dev.id).tv64 = val.tv64;
+
+	return count;
+}
+static DEVICE_ATTR(tp, 0644, show_tp, store_tp);
+
 static void __cpuinit register_cpu_control(struct cpu *cpu)
 {
 	device_create_file(&cpu->dev, &dev_attr_online);
+	device_create_file(&cpu->dev, &dev_attr_tp);
 }
 void unregister_cpu(struct cpu *cpu)
 {
@@ -75,6 +101,7 @@ void unregister_cpu(struct cpu *cpu)
 	unregister_cpu_under_node(logical_cpu, cpu_to_node(logical_cpu));
 
 	device_remove_file(&cpu->dev, &dev_attr_online);
+	device_remove_file(&cpu->dev, &dev_attr_tp);
 
 	device_unregister(&cpu->dev);
 	per_cpu(cpu_sys_devices, logical_cpu) = NULL;
