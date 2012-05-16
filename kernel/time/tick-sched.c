@@ -25,8 +25,6 @@
 
 #include "tick-internal.h"
 
-ktime_set(0, NSEC_PER_SEC / HZ);
-
 /*
  * Per cpu nohz control structure
  */
@@ -762,6 +760,8 @@ void tick_check_idle(int cpu)
  * High resolution timer specific code
  */
 #ifdef CONFIG_HIGH_RES_TIMERS
+ktime_t get_cpu_tick_period(int cpu);
+
 /*
  * We rearm the timer until we get disabled by the idle code.
  * Called with interrupts disabled and timer->base->cpu_base->lock held.
@@ -811,7 +811,7 @@ static enum hrtimer_restart tick_sched_timer(struct hrtimer *timer)
 		profile_tick(CPU_PROFILING);
 	}
 
-	hrtimer_forward(timer, now, tick_period);
+	hrtimer_forward(timer, now, get_cpu_tick_period(cpu));
 
 	return HRTIMER_RESTART;
 }

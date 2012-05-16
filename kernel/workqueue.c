@@ -976,6 +976,8 @@ static bool is_chained_work(struct workqueue_struct *wq)
 	return false;
 }
 
+int cpu_get_nohz_target(int cpu);
+
 static void __queue_work(unsigned int cpu, struct workqueue_struct *wq,
 			 struct work_struct *work)
 {
@@ -991,6 +993,8 @@ static void __queue_work(unsigned int cpu, struct workqueue_struct *wq,
 	if (unlikely(wq->flags & WQ_DRAINING) &&
 	    WARN_ON_ONCE(!is_chained_work(wq)))
 		return;
+
+	cpu = cpu_get_nohz_target(cpu);
 
 	/* determine gcwq to use */
 	if (!(wq->flags & WQ_UNBOUND)) {

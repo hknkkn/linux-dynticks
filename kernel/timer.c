@@ -699,6 +699,8 @@ static struct tvec_base *lock_timer_base(struct timer_list *timer,
 	}
 }
 
+int cpu_get_nohz_target(int cpu);
+
 static inline int
 __mod_timer(struct timer_list *timer, unsigned long expires,
 						bool pending_only, int pinned)
@@ -731,6 +733,9 @@ __mod_timer(struct timer_list *timer, unsigned long expires,
 	if (!pinned && get_sysctl_timer_migration() && idle_cpu(cpu))
 		cpu = get_nohz_timer_target();
 #endif
+
+	cpu = cpu_get_nohz_target(cpu);
+
 	new_base = per_cpu(tvec_bases, cpu);
 
 	if (base != new_base) {
