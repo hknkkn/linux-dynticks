@@ -13,6 +13,7 @@
 #include <linux/gfp.h>
 #include <linux/slab.h>
 #include <linux/percpu.h>
+#include <linux/tick.h>
 
 #include "base.h"
 
@@ -74,14 +75,51 @@ static ssize_t show_nohz(struct device *dev,
 
 	return sprintf(buf, "%d\n", per_cpu(nohz_on, cpu->dev.id));
 }
-
+void tick_setup_sched_timer_call(void* ignore)
+{
+	printk(KERN_INFO "setting up sched timer on cpu %d\n", smp_processor_id());
+	tick_setup_sched_timer();
+	printk(KERN_INFO "done setting up sched timer on cpu %d\n", smp_processor_id());
+}
+void tick_cancel_sched_timer_call(void* ignore)
+{
+	printk(KERN_INFO "canceling sched timer on cpu %d\n", smp_processor_id());
+	tick_cancel_sched_timer(smp_processor_id());
+	printk(KERN_INFO "done canceling sched timer on cpu %d\n", smp_processor_id());
+}
 static ssize_t __ref store_nohz(struct device *dev,
 				  struct device_attribute *attr,
 				  const char *buf, size_t count)
 {
 	struct cpu *cpu = container_of(dev, struct cpu, dev);
+	bool was_on = per_cpu(nohz_on, cpu->dev.id);
+	bool turn_on = buf[0] != '0';
 
-	per_cpu(nohz_on, cpu->dev.id) = buf[0] != '0';
+	per_cpu(nohz_on, cpu->dev.id) = turn_on;
+
+	if (!was_on && turn_on) {
+		printk(KERN_INFO
+				"sending cancel sched timer to cpu %d on cpu %d\n",
+				cpu->dev.id,
+				smp_processor_id());
+		smp_call_function_single(cpu->dev.id,
+				tick_cancel_sched_timer_call, NULL, 0);
+		printk(KERN_INFO
+						"sent cancel sched timer to cpu %d on cpu %d\n",
+						cpu->dev.id,
+						smp_processor_id());
+	} else if (was_on && !turn_on) {
+		printk(KERN_INFO
+				"sending setup sched timer to cpu %d on cpu %d\n",
+				cpu->dev.id,
+				smp_processor_id());
+		smp_call_function_single(cpu->dev.id,
+				tick_setup_sched_timer_call,NULL,0);
+		printk(KERN_INFO
+						"sent setup sched timer to cpu %d on cpu %d\n",
+						cpu->dev.id,
+						smp_processor_id());
+	}
 
 	return count;
 }
