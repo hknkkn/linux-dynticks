@@ -55,7 +55,7 @@ static int process_vm_rw_pages(struct task_struct *task,
 {
 	int pages_pinned;
 	void *target_kaddr;
-	void *local_kaddr;
+	void *local_addr;
 	int pgs_copied = 0;
 	int j;
 	int ret;
@@ -98,12 +98,12 @@ static int process_vm_rw_pages(struct task_struct *task,
 				      lvec[*lvec_current].iov_len
 				      - *lvec_offset);
 
-		local_kaddr = lvec[*lvec_current].iov_base + *lvec_offset;
+		local_addr = lvec[*lvec_current].iov_base + *lvec_offset;
 		if (bytes_to_copy != PAGE_SIZE) {
 			printk(KERN_INFO "nonremapable pages in process_vm_rw due to PAGE_SIZE != bytes_to_copy\n");
 		} else if (start_offset != 0) {
 			printk(KERN_INFO "nonremapable pages in process_vm_rw due to start_address != 0\n");
-		} else if ((unsigned long)local_kaddr % PAGE_SIZE != 0) {
+		} else if ((unsigned long)local_addr % PAGE_SIZE != 0) {
 			printk(KERN_INFO "nonremapable pages in process_vm_rw due to local_address not aligned 0\n");
 		} else {
 			// Remap pages rather than copying
@@ -112,9 +112,9 @@ static int process_vm_rw_pages(struct task_struct *task,
 
 		target_kaddr = kmap(process_pages[pgs_copied]) + start_offset;
 		if (vm_write)
-			ret = copy_from_user(target_kaddr, local_kaddr, bytes_to_copy);
+			ret = copy_from_user(target_kaddr, local_addr, bytes_to_copy);
 		else
-			ret = copy_to_user(local_kaddr, target_kaddr, bytes_to_copy);
+			ret = copy_to_user(local_addr, target_kaddr, bytes_to_copy);
 		kunmap(process_pages[pgs_copied]);
 
 		if (ret) {
