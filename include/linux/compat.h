@@ -265,9 +265,9 @@ long compat_sys_shmat(int first, int second, compat_uptr_t third, int version,
 #else
 long compat_sys_semctl(int semid, int semnum, int cmd, int arg);
 long compat_sys_msgsnd(int msqid, struct compat_msgbuf __user *msgp,
-		size_t msgsz, int msgflg);
+		compat_ssize_t msgsz, int msgflg);
 long compat_sys_msgrcv(int msqid, struct compat_msgbuf __user *msgp,
-		size_t msgsz, long msgtyp, int msgflg);
+		compat_ssize_t msgsz, long msgtyp, int msgflg);
 long compat_sys_shmat(int shmid, compat_uptr_t shmaddr, int shmflg);
 #endif
 long compat_sys_msgctl(int first, int second, void __user *uptr);
@@ -589,6 +589,9 @@ asmlinkage ssize_t compat_sys_process_vm_writev(compat_pid_t pid,
 		const struct compat_iovec __user *lvec,
 		unsigned long liovcnt, const struct compat_iovec __user *rvec,
 		unsigned long riovcnt, unsigned long flags);
+
+asmlinkage long compat_sys_sendfile(int out_fd, int in_fd,
+				    compat_off_t __user *offset, compat_size_t count);
 
 #else
 

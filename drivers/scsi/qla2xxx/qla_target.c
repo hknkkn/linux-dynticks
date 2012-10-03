@@ -969,7 +969,7 @@ void qlt_stop_phase1(struct qla_tgt *tgt)
 	spin_unlock_irqrestore(&ha->hardware_lock, flags);
 	mutex_unlock(&ha->tgt.tgt_mutex);
 
-	flush_delayed_work_sync(&tgt->sess_del_work);
+	flush_delayed_work(&tgt->sess_del_work);
 
 	ql_dbg(ql_dbg_tgt_mgt, vha, 0xf009,
 	    "Waiting for sess works (tgt %p)", tgt);
@@ -2643,19 +2643,9 @@ static void qlt_do_work(struct work_struct *work)
 	spin_lock_irqsave(&ha->hardware_lock, flags);
 	sess = ha->tgt.tgt_ops->find_sess_by_s_id(vha,
 	    atio->u.isp24.fcp_hdr.s_id);
-	if (sess) {
-		if (unlikely(sess->tearing_down)) {
-			sess = NULL;
-			spin_unlock_irqrestore(&ha->hardware_lock, flags);
-			goto out_term;
-		} else {
-			/*
-			 * Do the extra kref_get() before dropping
-			 * qla_hw_data->hardware_lock.
-			 */
-			kref_get(&sess->se_sess->sess_kref);
-		}
-	}
+	/* Do kref_get() before dropping qla_hw_data->hardware_lock. */
+	if (sess)
+		kref_get(&sess->se_sess->sess_kref);
 	spin_unlock_irqrestore(&ha->hardware_lock, flags);
 
 	if (unlikely(!sess)) {
