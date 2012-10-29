@@ -198,6 +198,8 @@ static unsigned long __init free_all_bootmem_core(bootmem_data_t *bdata)
 			int order = ilog2(BITS_PER_LONG);
 
 			__free_pages_bootmem(pfn_to_page(start), order);
+			fixup_zone_present_pages(page_to_nid(pfn_to_page(start)),
+					start, start + BITS_PER_LONG);
 			count += BITS_PER_LONG;
 			start += BITS_PER_LONG;
 		} else {
@@ -208,6 +210,9 @@ static unsigned long __init free_all_bootmem_core(bootmem_data_t *bdata)
 				if (vec & 1) {
 					page = pfn_to_page(start + off);
 					__free_pages_bootmem(page, 0);
+					fixup_zone_present_pages(
+						page_to_nid(page),
+						start + off, start + off + 1);
 					count++;
 				}
 				vec >>= 1;
@@ -221,8 +226,11 @@ static unsigned long __init free_all_bootmem_core(bootmem_data_t *bdata)
 	pages = bdata->node_low_pfn - bdata->node_min_pfn;
 	pages = bootmem_bootmap_pages(pages);
 	count += pages;
-	while (pages--)
+	while (pages--) {
+		fixup_zone_present_pages(page_to_nid(page),
+				page_to_pfn(page), page_to_pfn(page) + 1);
 		__free_pages_bootmem(page++, 0);
+	}
 
 	bdebug("nid=%td released=%lx\n", bdata - bootmem_node_data, count);
 
@@ -419,7 +427,7 @@ int __init reserve_bootmem_node(pg_data_t *pgdat, unsigned long physaddr,
 }
 
 /**
- * reserve_bootmem - mark a page range as usable
+ * reserve_bootmem - mark a page range as reserved
  * @addr: starting address of the range
  * @size: size of the range in bytes
  * @flags: reservation flags (see linux/bootmem.h)
@@ -698,7 +706,7 @@ void * __init __alloc_bootmem(unsigned long size, unsigned long align,
 	return ___alloc_bootmem(size, align, goal, limit);
 }
 
-static void * __init ___alloc_bootmem_node_nopanic(pg_data_t *pgdat,
+void * __init ___alloc_bootmem_node_nopanic(pg_data_t *pgdat,
 				unsigned long size, unsigned long align,
 				unsigned long goal, unsigned long limit)
 {
@@ -709,6 +717,10 @@ again:
 					   align, goal, limit);
 	if (ptr)
 		return ptr;
+
+	/* do not panic in alloc_bootmem_bdata() */
+	if (limit && goal + size > limit)
+		limit = 0;
 
 	ptr = alloc_bootmem_bdata(pgdat->bdata, size, align, goal, limit);
 	if (ptr)

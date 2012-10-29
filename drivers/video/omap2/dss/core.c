@@ -32,6 +32,8 @@
 #include <linux/io.h>
 #include <linux/device.h>
 #include <linux/regulator/consumer.h>
+#include <linux/suspend.h>
+#include <linux/slab.h>
 
 #include <video/omapdss.h>
 
@@ -55,6 +57,11 @@ MODULE_PARM_DESC(def_disp, "default display name");
 bool dss_debug;
 module_param_named(debug, dss_debug, bool, 0644);
 #endif
+
+const char *dss_get_default_display_name(void)
+{
+	return core.default_display_name;
+}
 
 /* REGULATORS */
 
@@ -201,6 +208,28 @@ int dss_debugfs_create_file(const char *name, void (*write)(struct seq_file *))
 #endif /* CONFIG_DEBUG_FS && CONFIG_OMAP2_DSS_DEBUG_SUPPORT */
 
 /* PLATFORM DEVICE */
+static int omap_dss_pm_notif(struct notifier_block *b, unsigned long v, void *d)
+{
+	DSSDBG("pm notif %lu\n", v);
+
+	switch (v) {
+	case PM_SUSPEND_PREPARE:
+		DSSDBG("suspending displays\n");
+		return dss_suspend_all_devices();
+
+	case PM_POST_SUSPEND:
+		DSSDBG("resuming displays\n");
+		return dss_resume_all_devices();
+
+	default:
+		return 0;
+	}
+}
+
+static struct notifier_block omap_dss_pm_notif_block = {
+	.notifier_call = omap_dss_pm_notif,
+};
+
 static int __init omap_dss_probe(struct platform_device *pdev)
 {
 	struct omap_dss_board_info *pdata = pdev->dev.platform_data;
@@ -224,6 +253,8 @@ static int __init omap_dss_probe(struct platform_device *pdev)
 	else if (pdata->default_device)
 		core.default_display_name = pdata->default_device->name;
 
+	register_pm_notifier(&omap_dss_pm_notif_block);
+
 	return 0;
 
 err_debugfs:
@@ -233,6 +264,8 @@ err_debugfs:
 
 static int omap_dss_remove(struct platform_device *pdev)
 {
+	unregister_pm_notifier(&omap_dss_pm_notif_block);
+
 	dss_uninitialize_debugfs();
 
 	dss_uninit_overlays(pdev);
@@ -247,25 +280,9 @@ static void omap_dss_shutdown(struct platform_device *pdev)
 	dss_disable_all_devices();
 }
 
-static int omap_dss_suspend(struct platform_device *pdev, pm_message_t state)
-{
-	DSSDBG("suspend %d\n", state.event);
-
-	return dss_suspend_all_devices();
-}
-
-static int omap_dss_resume(struct platform_device *pdev)
-{
-	DSSDBG("resume\n");
-
-	return dss_resume_all_devices();
-}
-
 static struct platform_driver omap_dss_driver = {
 	.remove         = omap_dss_remove,
 	.shutdown	= omap_dss_shutdown,
-	.suspend	= omap_dss_suspend,
-	.resume		= omap_dss_resume,
 	.driver         = {
 		.name   = "omapdss",
 		.owner  = THIS_MODULE,
@@ -336,17 +353,14 @@ static int dss_driver_probe(struct device *dev)
 	int r;
 	struct omap_dss_driver *dssdrv = to_dss_driver(dev->driver);
 	struct omap_dss_device *dssdev = to_dss_device(dev);
-	bool force;
 
 	DSSDBG("driver_probe: dev %s/%s, drv %s\n",
 				dev_name(dev), dssdev->driver_name,
 				dssdrv->driver.name);
 
-	dss_init_device(core.pdev, dssdev);
-
-	force = core.default_display_name &&
-		strcmp(core.default_display_name, dssdev->name) == 0;
-	dss_recheck_connections(dssdev, force);
+	r = dss_init_device(core.pdev, dssdev);
+	if (r)
+		return r;
 
 	r = dssdrv->probe(dssdev);
 
@@ -405,54 +419,44 @@ void omap_dss_unregister_driver(struct omap_dss_driver *dssdriver)
 EXPORT_SYMBOL(omap_dss_unregister_driver);
 
 /* DEVICE */
-static void reset_device(struct device *dev, int check)
-{
-	u8 *dev_p = (u8 *)dev;
-	u8 *dev_end = dev_p + sizeof(*dev);
-	void *saved_pdata;
-
-	saved_pdata = dev->platform_data;
-	if (check) {
-		/*
-		 * Check if there is any other setting than platform_data
-		 * in struct device; warn that these will be reset by our
-		 * init.
-		 */
-		dev->platform_data = NULL;
-		while (dev_p < dev_end) {
-			if (*dev_p) {
-				WARN("%s: struct device fields will be "
-						"discarded\n",
-				     __func__);
-				break;
-			}
-			dev_p++;
-		}
-	}
-	memset(dev, 0, sizeof(*dev));
-	dev->platform_data = saved_pdata;
-}
-
 
 static void omap_dss_dev_release(struct device *dev)
 {
-	reset_device(dev, 0);
+	struct omap_dss_device *dssdev = to_dss_device(dev);
+	kfree(dssdev);
 }
 
-int omap_dss_register_device(struct omap_dss_device *dssdev,
-		struct device *parent, int disp_num)
-{
-	WARN_ON(!dssdev->driver_name);
+static int disp_num_counter;
 
-	reset_device(&dssdev->dev, 1);
+struct omap_dss_device *dss_alloc_and_init_device(struct device *parent)
+{
+	struct omap_dss_device *dssdev;
+
+	dssdev = kzalloc(sizeof(*dssdev), GFP_KERNEL);
+	if (!dssdev)
+		return NULL;
+
 	dssdev->dev.bus = &dss_bus_type;
 	dssdev->dev.parent = parent;
 	dssdev->dev.release = omap_dss_dev_release;
-	dev_set_name(&dssdev->dev, "display%d", disp_num);
-	return device_register(&dssdev->dev);
+	dev_set_name(&dssdev->dev, "display%d", disp_num_counter++);
+
+	device_initialize(&dssdev->dev);
+
+	return dssdev;
 }
 
-void omap_dss_unregister_device(struct omap_dss_device *dssdev)
+int dss_add_device(struct omap_dss_device *dssdev)
+{
+	return device_add(&dssdev->dev);
+}
+
+void dss_put_device(struct omap_dss_device *dssdev)
+{
+	put_device(&dssdev->dev);
+}
+
+void dss_unregister_device(struct omap_dss_device *dssdev)
 {
 	device_unregister(&dssdev->dev);
 }
@@ -460,13 +464,23 @@ void omap_dss_unregister_device(struct omap_dss_device *dssdev)
 static int dss_unregister_dss_dev(struct device *dev, void *data)
 {
 	struct omap_dss_device *dssdev = to_dss_device(dev);
-	omap_dss_unregister_device(dssdev);
+	dss_unregister_device(dssdev);
 	return 0;
 }
 
-void omap_dss_unregister_child_devices(struct device *parent)
+void dss_unregister_child_devices(struct device *parent)
 {
 	device_for_each_child(parent, NULL, dss_unregister_dss_dev);
+}
+
+void dss_copy_device_pdata(struct omap_dss_device *dst,
+		const struct omap_dss_device *src)
+{
+	u8 *d = (u8 *)dst;
+	u8 *s = (u8 *)src;
+	size_t dsize = sizeof(struct device);
+
+	memcpy(d + dsize, s + dsize, sizeof(struct omap_dss_device) - dsize);
 }
 
 /* BUS */
