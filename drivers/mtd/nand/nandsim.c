@@ -28,7 +28,7 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/vmalloc.h>
-#include <asm/div64.h>
+#include <linux/math64.h>
 #include <linux/slab.h>
 #include <linux/errno.h>
 #include <linux/string.h>
@@ -447,8 +447,6 @@ static unsigned int rptwear_cnt = 0;
 /* MTD structure for NAND controller */
 static struct mtd_info *nsmtd;
 
-static u_char ns_verify_buf[NS_LARGEST_PAGE_SIZE];
-
 /*
  * Allocate array of page pointers, create slab allocation for an array
  * and initialize the array by NULL pointers.
@@ -546,12 +544,6 @@ static char *get_partition_name(int i)
 	return kstrdup(buf, GFP_KERNEL);
 }
 
-static uint64_t divide(uint64_t n, uint32_t d)
-{
-	do_div(n, d);
-	return n;
-}
-
 /*
  * Initialize the nandsim structure.
  *
@@ -580,7 +572,7 @@ static int init_nandsim(struct mtd_info *mtd)
 	ns->geom.oobsz    = mtd->oobsize;
 	ns->geom.secsz    = mtd->erasesize;
 	ns->geom.pgszoob  = ns->geom.pgsz + ns->geom.oobsz;
-	ns->geom.pgnum    = divide(ns->geom.totsz, ns->geom.pgsz);
+	ns->geom.pgnum    = div_u64(ns->geom.totsz, ns->geom.pgsz);
 	ns->geom.totszoob = ns->geom.totsz + (uint64_t)ns->geom.pgnum * ns->geom.oobsz;
 	ns->geom.secshift = ffs(ns->geom.secsz) - 1;
 	ns->geom.pgshift  = chip->page_shift;
@@ -921,7 +913,7 @@ static int setup_wear_reporting(struct mtd_info *mtd)
 
 	if (!rptwear)
 		return 0;
-	wear_eb_count = divide(mtd->size, mtd->erasesize);
+	wear_eb_count = div_u64(mtd->size, mtd->erasesize);
 	mem = wear_eb_count * sizeof(unsigned long);
 	if (mem / sizeof(unsigned long) != wear_eb_count) {
 		NS_ERR("Too many erase blocks for wear reporting\n");
@@ -2195,19 +2187,6 @@ static void ns_nand_read_buf(struct mtd_info *mtd, u_char *buf, int len)
 	return;
 }
 
-static int ns_nand_verify_buf(struct mtd_info *mtd, const u_char *buf, int len)
-{
-	ns_nand_read_buf(mtd, (u_char *)&ns_verify_buf[0], len);
-
-	if (!memcmp(buf, &ns_verify_buf[0], len)) {
-		NS_DBG("verify_buf: the buffer is OK\n");
-		return 0;
-	} else {
-		NS_DBG("verify_buf: the buffer is wrong\n");
-		return -EFAULT;
-	}
-}
-
 /*
  * Module initialization function
  */
@@ -2242,7 +2221,6 @@ static int __init ns_init_module(void)
 	chip->dev_ready  = ns_device_ready;
 	chip->write_buf  = ns_nand_write_buf;
 	chip->read_buf   = ns_nand_read_buf;
-	chip->verify_buf = ns_nand_verify_buf;
 	chip->read_word  = ns_nand_read_word;
 	chip->ecc.mode   = NAND_ECC_SOFT;
 	/* The NAND_SKIP_BBTSCAN option is necessary for 'overridesize' */
@@ -2339,6 +2317,7 @@ static int __init ns_init_module(void)
 		uint64_t new_size = (uint64_t)nsmtd->erasesize << overridesize;
 		if (new_size >> overridesize != nsmtd->erasesize) {
 			NS_ERR("overridesize is too big\n");
+			retval = -EINVAL;
 			goto err_exit;
 		}
 		/* N.B. This relies on nand_scan not doing anything with the size before we change it */
