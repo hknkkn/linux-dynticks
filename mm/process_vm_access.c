@@ -21,6 +21,16 @@
 #include <linux/compat.h>
 #endif
 
+struct stats {
+	unsigned long total; /* Number of pages we go thru */
+	unsigned long cowed;
+	unsigned long page_sized;
+	unsigned long remote_aligned;
+	unsigned long local_aligned;
+};
+
+static unsigned long calls = 0;
+
 /**
  * process_vm_rw_pages - read/write pages from task specified
  * @task: task to read/write from
@@ -51,7 +61,7 @@ static int process_vm_rw_pages(struct task_struct *task,
 			       size_t *lvec_offset,
 			       int vm_write,
 			       unsigned int nr_pages_to_copy,
-			       ssize_t *bytes_copied)
+			       ssize_t *bytes_copied, struct stats *stats)
 {
 	int pages_pinned;
 	void *target_kaddr;
@@ -80,12 +90,15 @@ static int process_vm_rw_pages(struct task_struct *task,
 	for (pgs_copied = 0;
 	     (pgs_copied < nr_pages_to_copy) && (*lvec_current < lvec_cnt);
 	     pgs_copied++) {
+		bool cow = true;
 		/* Make sure we have a non zero length iovec */
 		while (*lvec_current < lvec_cnt
 		       && lvec[*lvec_current].iov_len == 0)
 			(*lvec_current)++;
 		if (*lvec_current == lvec_cnt)
 			break;
+
+		stats->total++;
 
 		/*
 		 * Will copy smallest of:
@@ -95,19 +108,34 @@ static int process_vm_rw_pages(struct task_struct *task,
 		bytes_to_copy = min_t(ssize_t, PAGE_SIZE - start_offset,
 				      len - *bytes_copied);
 		bytes_to_copy = min_t(ssize_t, bytes_to_copy,
-				      lvec[*lvec_current].iov_len
-				      - *lvec_offset);
+				      lvec[*lvec_current].iov_len - *lvec_offset);
 
 		local_addr = lvec[*lvec_current].iov_base + *lvec_offset;
-		if (bytes_to_copy != PAGE_SIZE) {
-			printk(KERN_INFO "nonremapable pages in process_vm_rw due to PAGE_SIZE != bytes_to_copy\n");
-		} else if (start_offset != 0) {
-			printk(KERN_INFO "nonremapable pages in process_vm_rw due to start_address != 0\n");
-		} else if ((unsigned long)local_addr % PAGE_SIZE != 0) {
-			printk(KERN_INFO "nonremapable pages in process_vm_rw due to local_address not aligned 0\n");
-		} else {
+
+		if (bytes_to_copy == PAGE_SIZE)
+			stats->page_sized++;
+		else
+			cow = false;
+
+		if (start_offset == 0)
+			stats->remote_aligned++;
+		else
+			cow = false;
+
+		//if (((unsigned long)local_addr % PAGE_SIZE) == 0)
+		if (((unsigned long)local_addr & (~PAGE_MASK)) == 0)
+			stats->local_aligned++;
+		else {
+			//printk(KERN_INFO "local_addr is not aligned: %p\n", (void*)((unsigned long)local_addr & (~PAGE_MASK)));
+			cow = false;
+		}
+
+		if (cow) {
+			stats->cowed++;
 			// Remap pages rather than copying
-			printk(KERN_INFO "remapable pages in process_vm_rw\n");
+			// Optimize later: if both rvec and lvec are long enough to cover
+			// multiple sequential pages, then do unmapping/mapping batchy.
+
 		}
 
 		target_kaddr = kmap(process_pages[pgs_copied]) + start_offset;
@@ -185,7 +213,8 @@ static int process_vm_rw_single_vec(unsigned long addr,
 				    struct mm_struct *mm,
 				    struct task_struct *task,
 				    int vm_write,
-				    ssize_t *bytes_copied)
+				    ssize_t *bytes_copied,
+				    struct stats *stats)
 {
 	unsigned long pa = addr & PAGE_MASK;
 	unsigned long start_offset = addr - pa;
@@ -213,7 +242,7 @@ static int process_vm_rw_single_vec(unsigned long addr,
 					 lvec, lvec_cnt,
 					 lvec_current, lvec_offset,
 					 vm_write, nr_pages_to_copy,
-					 &bytes_copied_loop);
+					 &bytes_copied_loop, stats);
 		start_offset = 0;
 		*bytes_copied += bytes_copied_loop;
 
@@ -250,7 +279,7 @@ static ssize_t process_vm_rw_core(pid_t pid, const struct iovec *lvec,
 				  unsigned long liovcnt,
 				  const struct iovec *rvec,
 				  unsigned long riovcnt,
-				  unsigned long flags, int vm_write)
+				  unsigned long flags, int vm_write, struct stats *stats)
 {
 	struct task_struct *task;
 	struct page *pp_stack[PVM_MAX_PP_ARRAY_COUNT];
@@ -273,8 +302,7 @@ static ssize_t process_vm_rw_core(pid_t pid, const struct iovec *lvec,
 	for (i = 0; i < riovcnt; i++) {
 		iov_len = rvec[i].iov_len;
 		if (iov_len > 0) {
-			nr_pages_iov = ((unsigned long)rvec[i].iov_base
-					+ iov_len)
+			nr_pages_iov = ((unsigned long)rvec[i].iov_base + iov_len)
 				/ PAGE_SIZE - (unsigned long)rvec[i].iov_base
 				/ PAGE_SIZE + 1;
 			nr_pages = max(nr_pages, nr_pages_iov);
@@ -322,7 +350,7 @@ static ssize_t process_vm_rw_core(pid_t pid, const struct iovec *lvec,
 		rc = process_vm_rw_single_vec(
 			(unsigned long)rvec[i].iov_base, rvec[i].iov_len,
 			lvec, liovcnt, &iov_l_curr_idx, &iov_l_curr_offset,
-			process_pages, mm, task, vm_write, &bytes_copied_loop);
+			process_pages, mm, task, vm_write, &bytes_copied_loop, stats);
 		bytes_copied += bytes_copied_loop;
 		if (rc != 0) {
 			/* If we have managed to copy any data at all then
@@ -372,6 +400,7 @@ static ssize_t process_vm_rw(pid_t pid,
 	struct iovec *iov_l = iovstack_l;
 	struct iovec *iov_r = iovstack_r;
 	ssize_t rc;
+	struct stats stats = {0,0,0,0,0};
 
 	if (flags != 0)
 		return -EINVAL;
@@ -392,8 +421,10 @@ static ssize_t process_vm_rw(pid_t pid,
 		goto free_iovecs;
 
 	rc = process_vm_rw_core(pid, iov_l, liovcnt, iov_r, riovcnt, flags,
-				vm_write);
+				vm_write, &stats);
 
+	printk(KERN_INFO "process_vm_rw(%lu): pid=%d len(l)=%lu l.base=%p l.len=%lu len(r)=%lu r.base=%p r.len=%lu total=%lu cowed=%lu pg_sized=%lu rem_align=%lu loc_align=%lu\n",
+							calls++, current->pid, liovcnt, iov_l->iov_base, iov_l->iov_len, riovcnt, iov_r->iov_base, iov_r->iov_len, stats.total, stats.cowed, stats.page_sized, stats.remote_aligned, stats.local_aligned);
 free_iovecs:
 	if (iov_r != iovstack_r)
 		kfree(iov_r);
@@ -433,6 +464,7 @@ compat_process_vm_rw(compat_pid_t pid,
 	struct iovec *iov_l = iovstack_l;
 	struct iovec *iov_r = iovstack_r;
 	ssize_t rc = -EFAULT;
+	struct stats stats = {0,0,0,0,0};
 
 	if (flags != 0)
 		return -EINVAL;
@@ -460,8 +492,10 @@ compat_process_vm_rw(compat_pid_t pid,
 		goto free_iovecs;
 
 	rc = process_vm_rw_core(pid, iov_l, liovcnt, iov_r, riovcnt, flags,
-			   vm_write);
+			   vm_write, &stats);
 
+	printk(KERN_INFO "process_vm_rw(%lu): pid=%d len(l)=%lu l.base=%p l.len=%lu len(r)=%lu r.base=%p r.len=%lu total=%lu cowed=%lu pg_sized=%lu rem_align=%lu loc_align=%lu\n",
+						calls++, current->pid, liovcnt, iov_l->iov_base, iov_l->iov_len, riovcnt, iov_r->iov_base, iov_r->iov_len, stats.total, stats.cowed, stats.page_sized, stats.remote_aligned, stats.local_aligned);
 free_iovecs:
 	if (iov_r != iovstack_r)
 		kfree(iov_r);
