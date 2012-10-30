@@ -324,40 +324,8 @@ static struct rcu_node *rcu_get_root(struct rcu_state *rsp)
 	return &rsp->node[0];
 }
 
-bool cpu_nohz_on(int cpu);
-/*
- * If the specified CPU is offline, tell the caller that it is in
- * a quiescent state.  Otherwise, whack it with a reschedule IPI.
- * Grace periods can end up waiting on an offline CPU when that
- * CPU is in the process of coming online -- it will be added to the
- * rcu_node bitmasks before it actually makes it online.  The same thing
- * can happen while a CPU is in the process of coming online.  Because this
- * race is quite rare, we check for it after detecting that the grace
- * period has been delayed rather than checking each and every CPU
- * each and every time we start a new grace period.
- */
-static int rcu_implicit_offline_qs(struct rcu_data *rdp)
-{
-	/*
-	 * If the CPU is offline for more than a jiffy, it is in a quiescent
-	 * state.  We can trust its state not to change because interrupts
-	 * are disabled.  The reason for the jiffy's worth of slack is to
-	 * handle CPUs initializing on the way up and finding their way
-	 * to the idle loop on the way down.
-	 */
-	if ((cpu_is_offline(rdp->cpu) &&
-	    ULONG_CMP_LT(rdp->rsp->gp_start + 2, jiffies)) ||
-		cpu_nohz_on(rdp->cpu)) {
-		trace_rcu_fqs(rdp->rsp->name, rdp->gpnum, rdp->cpu, "ofl");
-		rdp->offline_fqs++;
-		return 1;
-	}
-	return 0;
-}
-
 /*
  * rcu_eqs_enter_common - current CPU is moving towards extended quiescent state
- *
  * If the new value of the ->dynticks_nesting counter now is zero,
  * we really have entered idle, and must do the appropriate accounting.
  * The caller must have disabled interrupts.
