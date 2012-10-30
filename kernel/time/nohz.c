@@ -12,11 +12,11 @@ int ncpus_per_dom = 4;
 extern ktime_t tick_period;
 ktime_t tick_nohz_period = { .tv64 = 100 * NSEC_PER_SEC / HZ }; // signed long long
 
-DEFINE_PER_CPU(bool, nohz_on) = 0;
+DEFINE_PER_CPU(int, nohz_on) = 0;
 
 bool cpu_nohz_on(int cpu)
 {
-	return per_cpu(nohz_on, cpu);
+	return per_cpu(nohz_on, cpu) > 0;
 }
 
 int cpu_get_nohz_target(int cpu)
@@ -30,7 +30,7 @@ int cpu_get_nohz_target(int cpu)
 
 ktime_t get_cpu_tick_period(int cpu)
 {
-	return per_cpu(nohz_on, cpu) ? tick_nohz_period : tick_period;
+	return per_cpu(nohz_on, cpu) > 0 ? tick_nohz_period : tick_period;
 }
 
 static ssize_t cpd_show(struct kobject *kobj, struct kobj_attribute *attr,
@@ -86,20 +86,10 @@ static int __init nohz_kobj_init(void)
 {
 	int retval;
 
-	/*
-	 * Create a simple kobject with the name of "kobject_example",
-	 * located under /sys/kernel/
-	 *
-	 * As this is a simple directory, no uevent will be sent to
-	 * userspace.  That is why this function should not be used for
-	 * any type of dynamic kobjects, where the name and number are
-	 * not known ahead of time.
-	 */
 	nohz_kobj = kobject_create_and_add("nohz", nohz_kobj);
 	if (!nohz_kobj)
 		return -ENOMEM;
 
-	/* Create the files associated with this kobject */
 	retval = sysfs_create_group(nohz_kobj, &attr_group);
 	if (retval)
 		kobject_put(nohz_kobj);
@@ -109,7 +99,7 @@ static int __init nohz_kobj_init(void)
 
 static void __exit nohz_kobj_exit(void)
 {
-	printk(KERN_INFO "sched_nt kernel object destroyed.");
+	printk(KERN_INFO "nohz kernel object destroyed.");
 	kobject_put(nohz_kobj);
 }
 

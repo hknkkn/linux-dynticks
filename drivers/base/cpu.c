@@ -65,7 +65,7 @@ static ssize_t __ref store_online(struct device *dev,
 }
 static DEVICE_ATTR(online, 0644, show_online, store_online);
 
-extern DEFINE_PER_CPU(bool, nohz_on);
+extern DEFINE_PER_CPU(int, nohz_on);
 
 static ssize_t show_nohz(struct device *dev,
 			   struct device_attribute *attr,
@@ -91,13 +91,30 @@ static ssize_t __ref store_nohz(struct device *dev,
 				  struct device_attribute *attr,
 				  const char *buf, size_t count)
 {
+	/*
+	 * 2 modes of nohz is available:
+	 *     1) echo 1 > /sys/devices/...../cpu#/nohz
+	 *        This slows down the tick. New tick
+	 *        period can be echoed into
+	 *        /sys/sched_nt/tsp and all nohz_1 cpus 
+	 *        will change their tick periods to this val.
+	 *     2) echo 2 > /sys/devices/...../cpu#/nohz
+	 *	  This cancels the tick timer on that cpu.
+	 */
 	struct cpu *cpu = container_of(dev, struct cpu, dev);
-	bool was_on = per_cpu(nohz_on, cpu->dev.id);
-	bool turn_on = buf[0] != '0';
+	int old_mode = per_cpu(nohz_on, cpu->dev.id);
+	int new_mode = buf[0] - '0';
+	int ret;
 
-	per_cpu(nohz_on, cpu->dev.id) = turn_on;
+	if(new_mode < 0 || new_mode > 2)
+		return -EINVAL;
 
-	if (!was_on && turn_on) {
+	if(new_mode == old_mode)
+		return count;
+
+	per_cpu(nohz_on, cpu->dev.id) = new_mode;
+
+	if(new_mode == 2) { 
 		printk(KERN_INFO
 				"sending cancel sched timer to cpu %d on cpu %d\n",
 				cpu->dev.id,
@@ -108,7 +125,7 @@ static ssize_t __ref store_nohz(struct device *dev,
 						"sent cancel sched timer to cpu %d on cpu %d\n",
 						cpu->dev.id,
 						smp_processor_id());
-	} else if (was_on && !turn_on) {
+	} else if (old_mode == 2) {
 		printk(KERN_INFO
 				"sending setup sched timer to cpu %d on cpu %d\n",
 				cpu->dev.id,
