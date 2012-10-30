@@ -132,7 +132,7 @@
 
 struct s3c64xx_spi_dma_data {
 	unsigned		ch;
-	enum dma_data_direction direction;
+	enum dma_transfer_direction direction;
 	enum dma_ch	dmach;
 	struct property		*dma_prop;
 };
@@ -835,9 +835,7 @@ static struct s3c64xx_spi_csinfo *s3c64xx_get_slave_ctrldata(
 		return ERR_PTR(-EINVAL);
 	}
 
-	for_each_child_of_node(slave_np, data_np)
-		if (!strcmp(data_np->name, "controller-data"))
-			break;
+	data_np = of_get_child_by_name(slave_np, "controller-data");
 	if (!data_np) {
 		dev_err(&spi->dev, "child node 'controller-data' not found\n");
 		return ERR_PTR(-EINVAL);
@@ -847,6 +845,7 @@ static struct s3c64xx_spi_csinfo *s3c64xx_get_slave_ctrldata(
 	if (!cs) {
 		dev_err(&spi->dev, "could not allocate memory for controller"
 					" data\n");
+		of_node_put(data_np);
 		return ERR_PTR(-ENOMEM);
 	}
 
@@ -855,11 +854,13 @@ static struct s3c64xx_spi_csinfo *s3c64xx_get_slave_ctrldata(
 		dev_err(&spi->dev, "chip select gpio is not specified or "
 					"invalid\n");
 		kfree(cs);
+		of_node_put(data_np);
 		return ERR_PTR(-EINVAL);
 	}
 
 	of_property_read_u32(data_np, "samsung,spi-feedback-delay", &fb_delay);
 	cs->fb_delay = fb_delay;
+	of_node_put(data_np);
 	return cs;
 }
 
@@ -1066,11 +1067,11 @@ static int __devinit s3c64xx_spi_get_dmares(
 
 	if (tx) {
 		dma_data = &sdd->tx_dma;
-		dma_data->direction = DMA_TO_DEVICE;
+		dma_data->direction = DMA_MEM_TO_DEV;
 		chan_str = "tx";
 	} else {
 		dma_data = &sdd->rx_dma;
-		dma_data->direction = DMA_FROM_DEVICE;
+		dma_data->direction = DMA_DEV_TO_MEM;
 		chan_str = "rx";
 	}
 
