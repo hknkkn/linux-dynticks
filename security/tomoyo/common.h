@@ -561,8 +561,8 @@ struct tomoyo_address_group {
 
 /* Subset of "struct stat". Used by conditional ACL and audit logs. */
 struct tomoyo_mini_stat {
-	uid_t uid;
-	gid_t gid;
+	kuid_t uid;
+	kgid_t gid;
 	ino_t ino;
 	umode_t mode;
 	dev_t dev;
@@ -860,7 +860,6 @@ struct tomoyo_aggregator {
 /* Structure for policy manager. */
 struct tomoyo_manager {
 	struct tomoyo_acl_head head;
-	bool is_domain;  /* True if manager is a domainname. */
 	/* A path to program or a domainname. */
 	const struct tomoyo_path_info *manager;
 };

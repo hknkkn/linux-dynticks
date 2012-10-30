@@ -302,7 +302,7 @@ nouveau_gpio_isr_del(struct drm_device *dev, int idx, u8 tag, u8 line,
 		spin_unlock_irqrestore(&pgpio->lock, flags);
 
 		list_for_each_entry_safe(isr, tmp, &tofree, head) {
-			flush_work_sync(&isr->work);
+			flush_work(&isr->work);
 			kfree(isr);
 		}
 	}
@@ -387,7 +387,7 @@ nouveau_gpio_reset(struct drm_device *dev)
 		if (dev_priv->card_type >= NV_D0) {
 			nv_mask(dev, 0x00d610 + (line * 4), 0xff, unk0);
 			if (unk1--)
-				nv_mask(dev, 0x00d640 + (unk1 * 4), 0xff, line);
+				nv_mask(dev, 0x00d740 + (unk1 * 4), 0xff, line);
 		} else
 		if (dev_priv->card_type >= NV_50) {
 			static const u32 regs[] = { 0xe100, 0xe28c };

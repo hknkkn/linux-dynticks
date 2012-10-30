@@ -249,20 +249,20 @@ static int nand_dev_ready(struct mtd_info *mtd)
 int bcm_umi_nand_inithw(void)
 {
 	/* Configure nand timing parameters */
-	REG_UMI_NAND_TCR &= ~0x7ffff;
-	REG_UMI_NAND_TCR |= HW_CFG_NAND_TCR;
+	writel(readl(&REG_UMI_NAND_TCR) & ~0x7ffff, &REG_UMI_NAND_TCR);
+	writel(readl(&REG_UMI_NAND_TCR) | HW_CFG_NAND_TCR, &REG_UMI_NAND_TCR);
 
 #if !defined(CONFIG_MTD_NAND_BCM_UMI_HWCS)
 	/* enable software control of CS */
-	REG_UMI_NAND_TCR |= REG_UMI_NAND_TCR_CS_SWCTRL;
+	writel(readl(&REG_UMI_NAND_TCR) | REG_UMI_NAND_TCR_CS_SWCTRL, &REG_UMI_NAND_TCR);
 #endif
 
 	/* keep NAND chip select asserted */
-	REG_UMI_NAND_RCSR |= REG_UMI_NAND_RCSR_CS_ASSERTED;
+	writel(readl(&REG_UMI_NAND_RCSR) | REG_UMI_NAND_RCSR_CS_ASSERTED, &REG_UMI_NAND_RCSR);
 
-	REG_UMI_NAND_TCR &= ~REG_UMI_NAND_TCR_WORD16;
+	writel(readl(&REG_UMI_NAND_TCR) & ~REG_UMI_NAND_TCR_WORD16, &REG_UMI_NAND_TCR);
 	/* enable writes to flash */
-	REG_UMI_MMD_ICR |= REG_UMI_MMD_ICR_FLASH_WP;
+	writel(readl(&REG_UMI_MMD_ICR) | REG_UMI_MMD_ICR_FLASH_WP, &REG_UMI_MMD_ICR);
 
 	writel(NAND_CMD_RESET, bcm_umi_io_base + REG_NAND_CMD_OFFSET);
 	nand_bcm_umi_wait_till_ready();
@@ -341,7 +341,7 @@ static int bcm_umi_nand_verify_buf(struct mtd_info *mtd, const u_char * buf,
 	 * for MLC parts which may have permanently stuck bits.
 	 */
 	struct nand_chip *chip = mtd->priv;
-	int ret = chip->ecc.read_page(mtd, chip, readbackbuf, 0);
+	int ret = chip->ecc.read_page(mtd, chip, readbackbuf, 0, 0);
 	if (ret < 0)
 		return -EFAULT;
 	else {
@@ -476,12 +476,7 @@ static int __devinit bcm_umi_nand_probe(struct platform_device *pdev)
 		this->badblock_pattern = &largepage_bbt;
 	}
 
-	/*
-	 * FIXME: ecc strength value of 6 bits per 512 bytes of data is a
-	 * conservative guess, given 13 ecc bytes and using bch alg.
-	 * (Assume Galois field order m=15 to allow a margin of error.)
-	 */
-	this->ecc.strength = 6;
+	this->ecc.strength = 8;
 
 #endif
 

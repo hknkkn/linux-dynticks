@@ -33,7 +33,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/mmc/mmc.h>
 
-#include <mach/mmc.h>
+#include <linux/platform_data/mmc-davinci.h>
 #include <mach/edma.h>
 
 /*
@@ -1533,4 +1533,5 @@ module_exit(davinci_mmcsd_exit);
 MODULE_AUTHOR("Texas Instruments India");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("MMC/SD driver for Davinci MMC controller");
+MODULE_ALIAS("platform:davinci_mmc");
 

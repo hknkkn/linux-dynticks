@@ -16,8 +16,6 @@
 #include "util/session.h"
 #include "util/symbol.h"
 
-#include <libelf.h>
-
 static const char *input_name;
 static bool force;
 static bool show_kernel;
@@ -71,7 +69,7 @@ static int perf_session__list_build_ids(void)
 {
 	struct perf_session *session;
 
-	elf_version(EV_CURRENT);
+	symbol__elf_init();
 
 	session = perf_session__new(input_name, O_RDONLY, force, false,
 				    &build_id__mark_dso_hit_ops);
@@ -84,7 +82,11 @@ static int perf_session__list_build_ids(void)
 	if (filename__fprintf_build_id(session->filename, stdout))
 		goto out;
 
-	if (with_hits)
+	/*
+	 * in pipe-mode, the only way to get the buildids is to parse
+	 * the record stream. Buildids are stored as RECORD_HEADER_BUILD_ID
+	 */
+	if (with_hits || session->fd_pipe)
 		perf_session__process_events(session, &build_id__mark_dso_hit_ops);
 
 	perf_session__fprintf_dsos_buildid(session, stdout, with_hits);
@@ -101,7 +103,8 @@ static int __cmd_buildid_list(void)
 	return perf_session__list_build_ids();
 }
 
-int cmd_buildid_list(int argc, const char **argv, const char *prefix __used)
+int cmd_buildid_list(int argc, const char **argv,
+		     const char *prefix __maybe_unused)
 {
 	argc = parse_options(argc, argv, options, buildid_list_usage, 0);
 	setup_pager();

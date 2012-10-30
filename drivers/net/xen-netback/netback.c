@@ -325,8 +325,7 @@ unsigned int xen_netbk_count_skb_slots(struct xenvif *vif, struct sk_buff *skb)
 	unsigned int count;
 	int i, copy_off;
 
-	count = DIV_ROUND_UP(
-			offset_in_page(skb->data)+skb_headlen(skb), PAGE_SIZE);
+	count = DIV_ROUND_UP(skb_headlen(skb), PAGE_SIZE);
 
 	copy_off = skb_headlen(skb) % PAGE_SIZE;
 
@@ -636,9 +635,7 @@ static void xen_netbk_rx_action(struct xen_netbk *netbk)
 		return;
 
 	BUG_ON(npo.copy_prod > ARRAY_SIZE(netbk->grant_copy_op));
-	ret = HYPERVISOR_grant_table_op(GNTTABOP_copy, &netbk->grant_copy_op,
-					npo.copy_prod);
-	BUG_ON(ret != 0);
+	gnttab_batch_copy(netbk->grant_copy_op, npo.copy_prod);
 
 	while ((skb = __skb_dequeue(&rxq)) != NULL) {
 		sco = (struct skb_cb_overlay *)skb->cb;
@@ -1364,8 +1361,6 @@ static unsigned xen_netbk_tx_build_gops(struct xen_netbk *netbk)
 					     INVALID_PENDING_IDX);
 		}
 
-		__skb_queue_tail(&netbk->tx_queue, skb);
-
 		netbk->pending_cons++;
 
 		request_gop = xen_netbk_get_requests(netbk, vif,
@@ -1376,6 +1371,8 @@ static unsigned xen_netbk_tx_build_gops(struct xen_netbk *netbk)
 			continue;
 		}
 		gop = request_gop;
+
+		__skb_queue_tail(&netbk->tx_queue, skb);
 
 		vif->tx.req_cons = idx;
 		xen_netbk_check_rx_xenvif(vif);
@@ -1461,18 +1458,15 @@ static void xen_netbk_tx_submit(struct xen_netbk *netbk)
 static void xen_netbk_tx_action(struct xen_netbk *netbk)
 {
 	unsigned nr_gops;
-	int ret;
 
 	nr_gops = xen_netbk_tx_build_gops(netbk);
 
 	if (nr_gops == 0)
 		return;
-	ret = HYPERVISOR_grant_table_op(GNTTABOP_copy,
-					netbk->tx_copy_ops, nr_gops);
-	BUG_ON(ret);
+
+	gnttab_batch_copy(netbk->tx_copy_ops, nr_gops);
 
 	xen_netbk_tx_submit(netbk);
-
 }
 
 static void xen_netbk_idx_release(struct xen_netbk *netbk, u16 pending_idx)

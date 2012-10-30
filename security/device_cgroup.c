@@ -447,22 +447,25 @@ static struct cftype dev_cgroup_files[] = {
 		.read_seq_string = devcgroup_seq_read,
 		.private = DEVCG_LIST,
 	},
+	{ }	/* terminate */
 };
-
-static int devcgroup_populate(struct cgroup_subsys *ss,
-				struct cgroup *cgroup)
-{
-	return cgroup_add_files(cgroup, ss, dev_cgroup_files,
-					ARRAY_SIZE(dev_cgroup_files));
-}
 
 struct cgroup_subsys devices_subsys = {
 	.name = "devices",
 	.can_attach = devcgroup_can_attach,
 	.create = devcgroup_create,
 	.destroy = devcgroup_destroy,
-	.populate = devcgroup_populate,
 	.subsys_id = devices_subsys_id,
+	.base_cftypes = dev_cgroup_files,
+
+	/*
+	 * While devices cgroup has the rudimentary hierarchy support which
+	 * checks the parent's restriction, it doesn't properly propagates
+	 * config changes in ancestors to their descendents.  A child
+	 * should only be allowed to add more restrictions to the parent's
+	 * configuration.  Fix it and remove the following.
+	 */
+	.broken_hierarchy = true,
 };
 
 int __devcgroup_inode_permission(struct inode *inode, int mask)

@@ -203,8 +203,8 @@ static int __init omap2_set_init_voltage(char *vdd_name, char *clk_name,
 	bootup_volt = opp_get_voltage(opp);
 	rcu_read_unlock();
 	if (!bootup_volt) {
-		pr_err("%s: unable to find voltage corresponding "
-			"to the bootup OPP for vdd_%s\n", __func__, vdd_name);
+		pr_err("%s: unable to find voltage corresponding to the bootup OPP for vdd_%s\n",
+		       __func__, vdd_name);
 		goto exit;
 	}
 
@@ -295,7 +295,7 @@ static int __init omap2_common_pm_init(void)
 }
 postcore_initcall(omap2_common_pm_init);
 
-static int __init omap2_common_pm_late_init(void)
+int __init omap2_common_pm_late_init(void)
 {
 	/*
 	 * In the case of DT, the PMIC and SR initialization will be done using
@@ -322,4 +322,3 @@ static int __init omap2_common_pm_late_init(void)
 
 	return 0;
 }
-late_initcall(omap2_common_pm_late_init);

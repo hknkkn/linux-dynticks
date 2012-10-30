@@ -40,11 +40,7 @@
 #define ASI_M_UNA01         0x01   /* Same here... */
 #define ASI_M_MXCC          0x02   /* Access to TI VIKING MXCC registers */
 #define ASI_M_FLUSH_PROBE   0x03   /* Reference MMU Flush/Probe; rw, ss */
-#ifndef CONFIG_SPARC_LEON
 #define ASI_M_MMUREGS       0x04   /* MMU Registers; rw, ss */
-#else
-#define ASI_M_MMUREGS       0x19
-#endif /* CONFIG_SPARC_LEON */
 #define ASI_M_TLBDIAG       0x05   /* MMU TLB only Diagnostics */
 #define ASI_M_DIAGS         0x06   /* Reference MMU Diagnostics */
 #define ASI_M_IODIAG        0x07   /* MMU I/O TLB only Diagnostics */
@@ -112,6 +108,20 @@
 
 #define ASI_M_ACTION       0x4c   /* Breakpoint Action Register (GNU/Viking) */
 
+/* LEON ASI */
+#define ASI_LEON_NOCACHE        0x01
+
+#define ASI_LEON_DCACHE_MISS    0x01
+
+#define ASI_LEON_CACHEREGS      0x02
+#define ASI_LEON_IFLUSH         0x10
+#define ASI_LEON_DFLUSH         0x11
+
+#define ASI_LEON_MMUFLUSH       0x18
+#define ASI_LEON_MMUREGS        0x19
+#define ASI_LEON_BYPASS         0x1c
+#define ASI_LEON_FLUSH_PAGE     0x10
+
 /* V9 Architecture mandary ASIs. */
 #define ASI_N			0x04 /* Nucleus				*/
 #define ASI_NL			0x0c /* Nucleus, little endian		*/
@@ -131,7 +141,8 @@
 /* SpitFire and later extended ASIs.  The "(III)" marker designates
  * UltraSparc-III and later specific ASIs.  The "(CMT)" marker designates
  * Chip Multi Threading specific ASIs.  "(NG)" designates Niagara specific
- * ASIs, "(4V)" designates SUN4V specific ASIs.
+ * ASIs, "(4V)" designates SUN4V specific ASIs.  "(NG4)" designates SPARC-T4
+ * and later ASIs.
  */
 #define ASI_PHYS_USE_EC		0x14 /* PADDR, E-cachable		*/
 #define ASI_PHYS_BYPASS_EC_E	0x15 /* PADDR, E-bit			*/
@@ -233,6 +244,7 @@
 #define ASI_UDBL_CONTROL_R	0x7f /* External UDB control regs rd low*/
 #define ASI_INTR_R		0x7f /* IRQ vector dispatch read	*/
 #define ASI_INTR_DATAN_R	0x7f /* (III) In irq vector data reg N	*/
+#define ASI_PIC			0xb0 /* (NG4) PIC registers		*/
 #define ASI_PST8_P		0xc0 /* Primary, 8 8-bit, partial	*/
 #define ASI_PST8_S		0xc1 /* Secondary, 8 8-bit, partial	*/
 #define ASI_PST16_P		0xc2 /* Primary, 4 16-bit, partial	*/

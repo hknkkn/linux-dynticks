@@ -224,13 +224,6 @@
 #define HIGH_PERF_SQ			(1 << 3)
 #define CK32K_LOWPWR_EN			(1 << 7)
 
-
-/* chip-specific feature flags, for i2c_device_id.driver_data */
-#define TWL4030_VAUX2		BIT(0)	/* pre-5030 voltage ranges */
-#define TPS_SUBSET		BIT(1)	/* tps659[23]0 have fewer LDOs */
-#define TWL5031			BIT(2)  /* twl5031 has different registers */
-#define TWL6030_CLASS		BIT(3)	/* TWL6030 class */
-
 /*----------------------------------------------------------------------*/
 
 /* is driver active, bound to a chip? */
@@ -575,7 +568,6 @@ add_numbered_child(unsigned chip, const char *name, int num,
 		goto err;
 	}
 
-	device_init_wakeup(&pdev->dev, can_wakeup);
 	pdev->dev.parent = &twl->client->dev;
 
 	if (pdata) {
@@ -600,6 +592,8 @@ add_numbered_child(unsigned chip, const char *name, int num,
 	}
 
 	status = platform_device_add(pdev);
+	if (status == 0)
+		device_init_wakeup(&pdev->dev, can_wakeup);
 
 err:
 	if (status < 0) {
@@ -723,8 +717,9 @@ add_children(struct twl4030_platform_data *pdata, unsigned irq_base,
 		static struct regulator_consumer_supply usb1v8 = {
 			.supply =	"usb1v8",
 		};
-		static struct regulator_consumer_supply usb3v1 = {
-			.supply =	"usb3v1",
+		static struct regulator_consumer_supply usb3v1[] = {
+			{ .supply =	"usb3v1" },
+			{ .supply =	"bci3v1" },
 		};
 
 	/* First add the regulators so that they can be used by transceiver */
@@ -752,7 +747,7 @@ add_children(struct twl4030_platform_data *pdata, unsigned irq_base,
 				return PTR_ERR(child);
 
 			child = add_regulator_linked(TWL4030_REG_VUSB3V1,
-						      &usb_fixed, &usb3v1, 1,
+						      &usb_fixed, usb3v1, 2,
 						      features);
 			if (IS_ERR(child))
 				return PTR_ERR(child);
@@ -773,7 +768,7 @@ add_children(struct twl4030_platform_data *pdata, unsigned irq_base,
 		if (twl_has_regulator() && child) {
 			usb1v5.dev_name = dev_name(child);
 			usb1v8.dev_name = dev_name(child);
-			usb3v1.dev_name = dev_name(child);
+			usb3v1[0].dev_name = dev_name(child);
 		}
 	}
 	if (twl_has_usb() && pdata->usb && twl_class_is_6030()) {
@@ -1137,12 +1132,7 @@ static void clocks_init(struct device *dev,
 	u32 rate;
 	u8 ctrl = HFCLK_FREQ_26_MHZ;
 
-#if defined(CONFIG_ARCH_OMAP2) || defined(CONFIG_ARCH_OMAP3)
-	if (cpu_is_omap2430())
-		osc = clk_get(dev, "osc_ck");
-	else
-		osc = clk_get(dev, "osc_sys_ck");
-
+	osc = clk_get(dev, "fck");
 	if (IS_ERR(osc)) {
 		printk(KERN_WARNING "Skipping twl internal clock init and "
 				"using bootloader value (unknown osc rate)\n");
@@ -1151,18 +1141,6 @@ static void clocks_init(struct device *dev,
 
 	rate = clk_get_rate(osc);
 	clk_put(osc);
-
-#else
-	/* REVISIT for non-OMAP systems, pass the clock rate from
-	 * board init code, using platform_data.
-	 */
-	osc = ERR_PTR(-EIO);
-
-	printk(KERN_WARNING "Skipping twl internal clock init and "
-	       "using bootloader value (unknown osc rate)\n");
-
-	return;
-#endif
 
 	switch (rate) {
 	case 19200000:
@@ -1225,9 +1203,22 @@ twl_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
 	struct twl4030_platform_data	*pdata = client->dev.platform_data;
 	struct device_node		*node = client->dev.of_node;
+	struct platform_device		*pdev;
 	int				irq_base = 0;
 	int				status;
 	unsigned			i, num_slaves;
+
+	pdev = platform_device_alloc(DRIVER_NAME, -1);
+	if (!pdev) {
+		dev_err(&client->dev, "can't alloc pdev\n");
+		return -ENOMEM;
+	}
+
+	status = platform_device_add(pdev);
+	if (status) {
+		platform_device_put(pdev);
+		return status;
+	}
 
 	if (node && !pdata) {
 		/*
@@ -1237,23 +1228,30 @@ twl_probe(struct i2c_client *client, const struct i2c_device_id *id)
 		pdata = devm_kzalloc(&client->dev,
 				     sizeof(struct twl4030_platform_data),
 				     GFP_KERNEL);
-		if (!pdata)
-			return -ENOMEM;
+		if (!pdata) {
+			status = -ENOMEM;
+			goto free;
+		}
 	}
 
 	if (!pdata) {
 		dev_dbg(&client->dev, "no platform data?\n");
-		return -EINVAL;
+		status = -EINVAL;
+		goto free;
 	}
+
+	platform_set_drvdata(pdev, pdata);
 
 	if (i2c_check_functionality(client->adapter, I2C_FUNC_I2C) == 0) {
 		dev_dbg(&client->dev, "can't talk I2C?\n");
-		return -EIO;
+		status = -EIO;
+		goto free;
 	}
 
 	if (inuse) {
 		dev_dbg(&client->dev, "driver is already in use\n");
-		return -EBUSY;
+		status = -EBUSY;
+		goto free;
 	}
 
 	if ((id->driver_data) & TWL6030_CLASS) {
@@ -1288,7 +1286,7 @@ twl_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	inuse = true;
 
 	/* setup clock framework */
-	clocks_init(&client->dev, pdata->clock);
+	clocks_init(&pdev->dev, pdata->clock);
 
 	/* read TWL IDCODE Register */
 	if (twl_id == TWL4030_CLASS_ID) {
@@ -1338,6 +1336,9 @@ twl_probe(struct i2c_client *client, const struct i2c_device_id *id)
 fail:
 	if (status < 0)
 		twl_remove(client);
+free:
+	if (status < 0)
+		platform_device_unregister(pdev);
 
 	return status;
 }

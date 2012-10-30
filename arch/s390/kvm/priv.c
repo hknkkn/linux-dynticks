@@ -1,5 +1,5 @@
 /*
- * priv.c - handling privileged instructions
+ * handling privileged instructions
  *
  * Copyright IBM Corp. 2008
  *
@@ -211,7 +211,7 @@ static void handle_stsi_3_2_2(struct kvm_vcpu *vcpu, struct sysinfo_3_2_2 *mem)
 	spin_unlock(&fi->lock);
 
 	/* deal with other level 3 hypervisors */
-	if (stsi(mem, 3, 2, 2) == -ENOSYS)
+	if (stsi(mem, 3, 2, 2))
 		mem->count = 0;
 	if (mem->count < 8)
 		mem->count++;
@@ -259,7 +259,7 @@ static int handle_stsi(struct kvm_vcpu *vcpu)
 		mem = get_zeroed_page(GFP_KERNEL);
 		if (!mem)
 			goto out_fail;
-		if (stsi((void *) mem, fc, sel1, sel2) == -ENOSYS)
+		if (stsi((void *) mem, fc, sel1, sel2))
 			goto out_mem;
 		break;
 	case 3:
@@ -380,3 +380,34 @@ int kvm_s390_handle_e5(struct kvm_vcpu *vcpu)
 	return -EOPNOTSUPP;
 }
 
+static int handle_sckpf(struct kvm_vcpu *vcpu)
+{
+	u32 value;
+
+	if (vcpu->arch.sie_block->gpsw.mask & PSW_MASK_PSTATE)
+		return kvm_s390_inject_program_int(vcpu,
+						   PGM_PRIVILEGED_OPERATION);
+
+	if (vcpu->run->s.regs.gprs[0] & 0x00000000ffff0000)
+		return kvm_s390_inject_program_int(vcpu,
+						   PGM_SPECIFICATION);
+
+	value = vcpu->run->s.regs.gprs[0] & 0x000000000000ffff;
+	vcpu->arch.sie_block->todpr = value;
+
+	return 0;
+}
+
+static intercept_handler_t x01_handlers[256] = {
+	[0x07] = handle_sckpf,
+};
+
+int kvm_s390_handle_01(struct kvm_vcpu *vcpu)
+{
+	intercept_handler_t handler;
+
+	handler = x01_handlers[vcpu->arch.sie_block->ipa & 0x00ff];
+	if (handler)
+		return handler(vcpu);
+	return -EOPNOTSUPP;
+}

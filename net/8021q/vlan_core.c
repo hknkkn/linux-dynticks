@@ -31,8 +31,7 @@ bool vlan_do_receive(struct sk_buff **skbp, bool last_handler)
 		/* Our lower layer thinks this is not local, let's make sure.
 		 * This allows the VLAN to have a different MAC than the
 		 * underlying device, and still route correctly. */
-		if (!compare_ether_addr(eth_hdr(skb)->h_dest,
-					vlan_dev->dev_addr))
+		if (ether_addr_equal(eth_hdr(skb)->h_dest, vlan_dev->dev_addr))
 			skb->pkt_type = PACKET_HOST;
 	}
 
@@ -369,3 +368,9 @@ void vlan_vids_del_by_dev(struct net_device *dev,
 		vlan_vid_del(dev, vid_info->vid);
 }
 EXPORT_SYMBOL(vlan_vids_del_by_dev);
+
+bool vlan_uses_dev(const struct net_device *dev)
+{
+	return rtnl_dereference(dev->vlan_info) ? true : false;
+}
+EXPORT_SYMBOL(vlan_uses_dev);

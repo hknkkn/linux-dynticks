@@ -41,10 +41,9 @@ static void mantis_hifevm_work(struct work_struct *work)
 	struct mantis_ca *ca = container_of(work, struct mantis_ca, hif_evm_work);
 	struct mantis_pci *mantis = ca->ca_priv;
 
-	u32 gpif_stat, gpif_mask;
+	u32 gpif_stat;
 
 	gpif_stat = mmread(MANTIS_GPIF_STATUS);
-	gpif_mask = mmread(MANTIS_GPIF_IRQCFG);
 
 	if (gpif_stat & MANTIS_GPIF_DETSTAT) {
 		if (gpif_stat & MANTIS_CARD_PLUGIN) {
@@ -112,7 +111,7 @@ void mantis_evmgr_exit(struct mantis_ca *ca)
 	struct mantis_pci *mantis = ca->ca_priv;
 
 	dprintk(MANTIS_DEBUG, 1, "Mantis Host I/F Event manager exiting");
-	flush_work_sync(&ca->hif_evm_work);
+	flush_work(&ca->hif_evm_work);
 	mantis_hif_exit(ca);
 	mantis_pcmcia_exit(ca);
 }

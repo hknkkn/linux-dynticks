@@ -26,9 +26,8 @@ struct pcie_port {
 	u8			root_bus_nr;
 	void __iomem		*base;
 	spinlock_t		conf_lock;
-	char			io_space_name[16];
 	char			mem_space_name[16];
-	struct resource		res[2];
+	struct resource		res;
 };
 
 static struct pcie_port pcie_port[2];
@@ -43,6 +42,7 @@ static int __init dove_pcie_setup(int nr, struct pci_sys_data *sys)
 		return 0;
 
 	pp = &pcie_port[nr];
+	sys->private_data = pp;
 	pp->root_bus_nr = sys->busnr;
 
 	/*
@@ -52,24 +52,10 @@ static int __init dove_pcie_setup(int nr, struct pci_sys_data *sys)
 
 	orion_pcie_setup(pp->base);
 
-	/*
-	 * IORESOURCE_IO
-	 */
-	snprintf(pp->io_space_name, sizeof(pp->io_space_name),
-		 "PCIe %d I/O", pp->index);
-	pp->io_space_name[sizeof(pp->io_space_name) - 1] = 0;
-	pp->res[0].name = pp->io_space_name;
-	if (pp->index == 0) {
-		pp->res[0].start = DOVE_PCIE0_IO_PHYS_BASE;
-		pp->res[0].end = pp->res[0].start + DOVE_PCIE0_IO_SIZE - 1;
-	} else {
-		pp->res[0].start = DOVE_PCIE1_IO_PHYS_BASE;
-		pp->res[0].end = pp->res[0].start + DOVE_PCIE1_IO_SIZE - 1;
-	}
-	pp->res[0].flags = IORESOURCE_IO;
-	if (request_resource(&ioport_resource, &pp->res[0]))
-		panic("Request PCIe IO resource failed\n");
-	pci_add_resource_offset(&sys->resources, &pp->res[0], sys->io_offset);
+	if (pp->index == 0)
+		pci_ioremap_io(sys->busnr * SZ_64K, DOVE_PCIE0_IO_PHYS_BASE);
+	else
+		pci_ioremap_io(sys->busnr * SZ_64K, DOVE_PCIE1_IO_PHYS_BASE);
 
 	/*
 	 * IORESOURCE_MEM
@@ -77,33 +63,20 @@ static int __init dove_pcie_setup(int nr, struct pci_sys_data *sys)
 	snprintf(pp->mem_space_name, sizeof(pp->mem_space_name),
 		 "PCIe %d MEM", pp->index);
 	pp->mem_space_name[sizeof(pp->mem_space_name) - 1] = 0;
-	pp->res[1].name = pp->mem_space_name;
+	pp->res.name = pp->mem_space_name;
 	if (pp->index == 0) {
-		pp->res[1].start = DOVE_PCIE0_MEM_PHYS_BASE;
-		pp->res[1].end = pp->res[1].start + DOVE_PCIE0_MEM_SIZE - 1;
+		pp->res.start = DOVE_PCIE0_MEM_PHYS_BASE;
+		pp->res.end = pp->res.start + DOVE_PCIE0_MEM_SIZE - 1;
 	} else {
-		pp->res[1].start = DOVE_PCIE1_MEM_PHYS_BASE;
-		pp->res[1].end = pp->res[1].start + DOVE_PCIE1_MEM_SIZE - 1;
+		pp->res.start = DOVE_PCIE1_MEM_PHYS_BASE;
+		pp->res.end = pp->res.start + DOVE_PCIE1_MEM_SIZE - 1;
 	}
-	pp->res[1].flags = IORESOURCE_MEM;
-	if (request_resource(&iomem_resource, &pp->res[1]))
+	pp->res.flags = IORESOURCE_MEM;
+	if (request_resource(&iomem_resource, &pp->res))
 		panic("Request PCIe Memory resource failed\n");
-	pci_add_resource_offset(&sys->resources, &pp->res[1], sys->mem_offset);
+	pci_add_resource_offset(&sys->resources, &pp->res, sys->mem_offset);
 
 	return 1;
-}
-
-static struct pcie_port *bus_to_port(int bus)
-{
-	int i;
-
-	for (i = num_pcie_ports - 1; i >= 0; i--) {
-		int rbus = pcie_port[i].root_bus_nr;
-		if (rbus != -1 && rbus <= bus)
-			break;
-	}
-
-	return i >= 0 ? pcie_port + i : NULL;
 }
 
 static int pcie_valid_config(struct pcie_port *pp, int bus, int dev)
@@ -121,7 +94,8 @@ static int pcie_valid_config(struct pcie_port *pp, int bus, int dev)
 static int pcie_rd_conf(struct pci_bus *bus, u32 devfn, int where,
 			int size, u32 *val)
 {
-	struct pcie_port *pp = bus_to_port(bus->number);
+	struct pci_sys_data *sys = bus->sysdata;
+	struct pcie_port *pp = sys->private_data;
 	unsigned long flags;
 	int ret;
 
@@ -140,7 +114,8 @@ static int pcie_rd_conf(struct pci_bus *bus, u32 devfn, int where,
 static int pcie_wr_conf(struct pci_bus *bus, u32 devfn,
 			int where, int size, u32 val)
 {
-	struct pcie_port *pp = bus_to_port(bus->number);
+	struct pci_sys_data *sys = bus->sysdata;
+	struct pcie_port *pp = sys->private_data;
 	unsigned long flags;
 	int ret;
 
@@ -194,14 +169,14 @@ dove_pcie_scan_bus(int nr, struct pci_sys_data *sys)
 
 static int __init dove_pcie_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
 {
-	struct pcie_port *pp = bus_to_port(dev->bus->number);
+	struct pci_sys_data *sys = dev->sysdata;
+	struct pcie_port *pp = sys->private_data;
 
 	return pp->index ? IRQ_DOVE_PCIE1 : IRQ_DOVE_PCIE0;
 }
 
 static struct hw_pci dove_pci __initdata = {
 	.nr_controllers	= 2,
-	.swizzle	= pci_std_swizzle,
 	.setup		= dove_pcie_setup,
 	.scan		= dove_pcie_scan_bus,
 	.map_irq	= dove_pcie_map_irq,
@@ -220,7 +195,7 @@ static void __init add_pcie_port(int index, unsigned long base)
 		pp->root_bus_nr = -1;
 		pp->base = (void __iomem *)base;
 		spin_lock_init(&pp->conf_lock);
-		memset(pp->res, 0, sizeof(pp->res));
+		memset(&pp->res, 0, sizeof(pp->res));
 	} else {
 		printk(KERN_INFO "link down, ignoring\n");
 	}

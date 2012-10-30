@@ -190,6 +190,7 @@ enum ip_set_dim {
 	 * If changed, new revision of iptables match/target is required.
 	 */
 	IPSET_DIM_MAX = 6,
+	IPSET_BIT_RETURN_NOMATCH = 7,
 };
 
 /* Option flags for kernel operations */
@@ -198,6 +199,7 @@ enum ip_set_kopt {
 	IPSET_DIM_ONE_SRC = (1 << IPSET_DIM_ONE),
 	IPSET_DIM_TWO_SRC = (1 << IPSET_DIM_TWO),
 	IPSET_DIM_THREE_SRC = (1 << IPSET_DIM_THREE),
+	IPSET_RETURN_NOMATCH = (1 << IPSET_BIT_RETURN_NOMATCH),
 };
 
 #ifdef __KERNEL__
@@ -206,8 +208,14 @@ enum ip_set_kopt {
 #include <linux/netlink.h>
 #include <linux/netfilter.h>
 #include <linux/netfilter/x_tables.h>
+#include <linux/stringify.h>
 #include <linux/vmalloc.h>
 #include <net/netlink.h>
+
+#define _IP_SET_MODULE_DESC(a, b, c)		\
+	MODULE_DESCRIPTION(a " type of IP sets, revisions " b "-" c)
+#define IP_SET_MODULE_DESC(a, b, c)		\
+	_IP_SET_MODULE_DESC(a, __stringify(b), __stringify(c))
 
 /* Set features */
 enum ip_set_feature {
@@ -223,6 +231,8 @@ enum ip_set_feature {
 	IPSET_TYPE_NAME = (1 << IPSET_TYPE_NAME_FLAG),
 	IPSET_TYPE_IFACE_FLAG = 5,
 	IPSET_TYPE_IFACE = (1 << IPSET_TYPE_IFACE_FLAG),
+	IPSET_TYPE_NOMATCH_FLAG = 6,
+	IPSET_TYPE_NOMATCH = (1 << IPSET_TYPE_NOMATCH_FLAG),
 	/* Strictly speaking not a feature, but a flag for dumping:
 	 * this settype must be dumped last */
 	IPSET_DUMP_LAST_FLAG = 7,
@@ -249,7 +259,7 @@ struct ip_set_type_variant {
 	 *		returns negative error code,
 	 *			zero for no match/success to add/delete
 	 *			positive for matching element */
-	int (*kadt)(struct ip_set *set, const struct sk_buff * skb,
+	int (*kadt)(struct ip_set *set, const struct sk_buff *skb,
 		    const struct xt_action_param *par,
 		    enum ipset_adt adt, const struct ip_set_adt_opt *opt);
 
@@ -411,26 +421,33 @@ ip_set_get_h16(const struct nlattr *attr)
 #define ipset_nest_start(skb, attr) nla_nest_start(skb, attr | NLA_F_NESTED)
 #define ipset_nest_end(skb, start)  nla_nest_end(skb, start)
 
-#define NLA_PUT_IPADDR4(skb, type, ipaddr)			\
-do {								\
-	struct nlattr *__nested = ipset_nest_start(skb, type);	\
-								\
-	if (!__nested)						\
-		goto nla_put_failure;				\
-	NLA_PUT_NET32(skb, IPSET_ATTR_IPADDR_IPV4, ipaddr);	\
-	ipset_nest_end(skb, __nested);				\
-} while (0)
+static inline int nla_put_ipaddr4(struct sk_buff *skb, int type, __be32 ipaddr)
+{
+	struct nlattr *__nested = ipset_nest_start(skb, type);
+	int ret;
 
-#define NLA_PUT_IPADDR6(skb, type, ipaddrptr)			\
-do {								\
-	struct nlattr *__nested = ipset_nest_start(skb, type);	\
-								\
-	if (!__nested)						\
-		goto nla_put_failure;				\
-	NLA_PUT(skb, IPSET_ATTR_IPADDR_IPV6,			\
-		sizeof(struct in6_addr), ipaddrptr);		\
-	ipset_nest_end(skb, __nested);				\
-} while (0)
+	if (!__nested)
+		return -EMSGSIZE;
+	ret = nla_put_net32(skb, IPSET_ATTR_IPADDR_IPV4, ipaddr);
+	if (!ret)
+		ipset_nest_end(skb, __nested);
+	return ret;
+}
+
+static inline int nla_put_ipaddr6(struct sk_buff *skb, int type,
+				  const struct in6_addr *ipaddrptr)
+{
+	struct nlattr *__nested = ipset_nest_start(skb, type);
+	int ret;
+
+	if (!__nested)
+		return -EMSGSIZE;
+	ret = nla_put(skb, IPSET_ATTR_IPADDR_IPV6,
+		      sizeof(struct in6_addr), ipaddrptr);
+	if (!ret)
+		ipset_nest_end(skb, __nested);
+	return ret;
+}
 
 /* Get address from skbuff */
 static inline __be32
@@ -472,8 +489,8 @@ union ip_set_name_index {
 
 #define IP_SET_OP_GET_BYNAME	0x00000006	/* Get set index by name */
 struct ip_set_req_get_set {
-	unsigned op;
-	unsigned version;
+	unsigned int op;
+	unsigned int version;
 	union ip_set_name_index set;
 };
 
@@ -482,8 +499,8 @@ struct ip_set_req_get_set {
 
 #define IP_SET_OP_VERSION	0x00000100	/* Ask kernel version */
 struct ip_set_req_version {
-	unsigned op;
-	unsigned version;
+	unsigned int op;
+	unsigned int version;
 };
 
 #endif /*_IP_SET_H */

@@ -1198,7 +1198,7 @@ static int vidioc_streamoff(struct file *file, void *fh, enum v4l2_buf_type i)
 
 	atomic_inc(&cam->reset_disable);
 
-	flush_work_sync(&cam->sensor_reset_work);
+	flush_work(&cam->sensor_reset_work);
 
 	rval = videobuf_streamoff(q);
 	if (!rval) {
@@ -1512,7 +1512,7 @@ static int omap24xxcam_release(struct file *file)
 
 	atomic_inc(&cam->reset_disable);
 
-	flush_work_sync(&cam->sensor_reset_work);
+	flush_work(&cam->sensor_reset_work);
 
 	/* stop streaming capture */
 	videobuf_streamoff(&fh->vbq);
@@ -1536,7 +1536,7 @@ static int omap24xxcam_release(struct file *file)
 	 * not be scheduled anymore since streaming is already
 	 * disabled.)
 	 */
-	flush_work_sync(&cam->sensor_reset_work);
+	flush_work(&cam->sensor_reset_work);
 
 	mutex_lock(&cam->mutex);
 	if (atomic_dec_return(&cam->users) == 0) {
@@ -1776,8 +1776,7 @@ static int __devinit omap24xxcam_probe(struct platform_device *pdev)
 	cam->mmio_size = resource_size(mem);
 
 	/* map the region */
-	cam->mmio_base = (unsigned long)
-		ioremap_nocache(cam->mmio_base_phys, cam->mmio_size);
+	cam->mmio_base = ioremap_nocache(cam->mmio_base_phys, cam->mmio_size);
 	if (!cam->mmio_base) {
 		dev_err(cam->dev, "cannot map camera register I/O region\n");
 		goto err;

@@ -58,7 +58,7 @@ static void omap_fb_output_poll_changed(struct drm_device *dev)
 	}
 }
 
-static struct drm_mode_config_funcs omap_mode_config_funcs = {
+static const struct drm_mode_config_funcs omap_mode_config_funcs = {
 	.fb_create = omap_framebuffer_create,
 	.output_poll_changed = omap_fb_output_poll_changed,
 };
@@ -571,8 +571,7 @@ static int dev_load(struct drm_device *dev, unsigned long flags)
 
 	dev->dev_private = priv;
 
-	priv->wq = alloc_workqueue("omapdrm",
-			WQ_UNBOUND | WQ_NON_REENTRANT, 1);
+	priv->wq = alloc_ordered_workqueue("omapdrm", 0);
 
 	INIT_LIST_HEAD(&priv->obj_list);
 
@@ -649,6 +648,8 @@ static int dev_firstopen(struct drm_device *dev)
  */
 static void dev_lastclose(struct drm_device *dev)
 {
+	int i;
+
 	/* we don't support vga-switcheroo.. so just make sure the fbdev
 	 * mode is active
 	 */
@@ -656,6 +657,21 @@ static void dev_lastclose(struct drm_device *dev)
 	int ret;
 
 	DBG("lastclose: dev=%p", dev);
+
+	/* need to restore default rotation state.. not sure if there is
+	 * a cleaner way to restore properties to default state?  Maybe
+	 * a flag that properties should automatically be restored to
+	 * default state on lastclose?
+	 */
+	for (i = 0; i < priv->num_crtcs; i++) {
+		drm_object_property_set_value(&priv->crtcs[i]->base,
+				priv->rotation_prop, 0);
+	}
+
+	for (i = 0; i < priv->num_planes; i++) {
+		drm_object_property_set_value(&priv->planes[i]->base,
+				priv->rotation_prop, 0);
+	}
 
 	ret = drm_fb_helper_restore_fbdev_mode(priv->fbdev);
 	if (ret)
@@ -726,7 +742,7 @@ static void dev_irq_uninstall(struct drm_device *dev)
 	DBG("irq_uninstall: dev=%p", dev);
 }
 
-static struct vm_operations_struct omap_gem_vm_ops = {
+static const struct vm_operations_struct omap_gem_vm_ops = {
 	.fault = omap_gem_fault,
 	.open = drm_gem_vm_open,
 	.close = drm_gem_vm_close,
@@ -746,7 +762,7 @@ static const struct file_operations omapdriver_fops = {
 
 static struct drm_driver omap_drm_driver = {
 		.driver_features =
-				DRIVER_HAVE_IRQ | DRIVER_MODESET | DRIVER_GEM,
+				DRIVER_HAVE_IRQ | DRIVER_MODESET | DRIVER_GEM | DRIVER_PRIME,
 		.load = dev_load,
 		.unload = dev_unload,
 		.open = dev_open,
@@ -761,11 +777,14 @@ static struct drm_driver omap_drm_driver = {
 		.irq_postinstall = dev_irq_postinstall,
 		.irq_uninstall = dev_irq_uninstall,
 		.irq_handler = dev_irq_handler,
-		.reclaim_buffers = drm_core_reclaim_buffers,
 #ifdef CONFIG_DEBUG_FS
 		.debugfs_init = omap_debugfs_init,
 		.debugfs_cleanup = omap_debugfs_cleanup,
 #endif
+		.prime_handle_to_fd = drm_gem_prime_handle_to_fd,
+		.prime_fd_to_handle = drm_gem_prime_fd_to_handle,
+		.gem_prime_export = omap_gem_prime_export,
+		.gem_prime_import = omap_gem_prime_import,
 		.gem_init_object = omap_gem_init_object,
 		.gem_free_object = omap_gem_free_object,
 		.gem_vm_ops = &omap_gem_vm_ops,
