@@ -172,6 +172,115 @@ update_ts_time_stats(int cpu, struct tick_sched *ts, ktime_t now, u64 *last_upda
 
 }
 
+#ifdef CONFIG_CPUSETS_NO_HZ
+/*
+ * This defines the number of CPUs currently in (or wanting to
+ * be in) adaptive nohz mode. Greater than 0 means at least
+ * one CPU is ready to shut down its tick for non-idle purposes.
+ */
+static atomic_t __read_mostly nr_cpus_user_nohz = ATOMIC_INIT(0);
+
+static inline int update_do_timer_cpu(int current_handler,
+			int new_handler)
+{
+	return cmpxchg(&tick_do_timer_cpu, current_handler, new_handler);
+}
+#else
+static inline int update_do_timer_cpu(int current_handler,
+			int new_handler)
+{
+	int tmp = ACCESS_ONCE(tick_do_timer_cpu);
+	tick_do_timer_cpu = new_handler;
+	return tmp;
+}
+#endif
+
+/*
+ * check_drop_timer_duty: Check if this cpu can shut down
+ * ticks without worrying about who is going to handle
+ * timekeeping. The duty is dropped here as well if possible.
+ * When there are adaptive nohz cpus in the system ready to
+ * run user tasks without ticks, this function makes sure
+ * that timekeeping is handled by a cpu. A non-adaptive-nohz
+ * cpu, if any, will claim the duty as soon as it discovers
+ * that some adaptive-nohz cpu is stuck with it.
+ *
+ * Returns the new value of tick_do_timer_cpu.
+ */
+static int check_drop_timer_duty(int cpu)
+{
+	int curr_handler, prev_handler, new_handler;
+	int nrepeat = -1;
+	bool drop_recheck;
+
+repeat:
+	WARN_ON_ONCE(++nrepeat > 1);
+	drop_recheck = false;
+	curr_handler = cpu;
+	new_handler = TICK_DO_TIMER_NONE;
+
+#ifdef CONFIG_CPUSETS_NO_HZ
+	if (atomic_read(&nr_cpus_user_nohz) > 0) {
+		curr_handler = ACCESS_ONCE(tick_do_timer_cpu);
+		/*
+		 * Keep the duty until someone takes it away.
+		 * FIXME: Make nr_cpus_user_nohz an atomic cpumask
+		 * to find an idle CPU to dump the duty at.
+		 */
+		if (curr_handler == cpu)
+			return cpu;
+		/*
+		 * This cpu will try to take the duty if 1) there is
+		 * no handler or 2) current handler seems to be an
+		 * adaptive-nohz cpu. We take the duty from others
+		 * only if the we are idle or not part of an
+		 * adaptive-nohz cpuset.
+		 * Once we take the duty, the check above ensures that
+		 * we stick with it.
+		 */
+		if (unlikely(curr_handler == TICK_DO_TIMER_NONE)
+			|| (per_cpu(tick_cpu_sched, curr_handler).user_nohz
+				&& (is_idle_task(current)
+					|| !cpuset_cpu_adaptive_nohz(cpu))))
+			new_handler = cpu;
+		else
+			/*
+			 * A regular CPU is updating the jiffies and we don't
+			 * have to take it away from her.
+			 */
+			new_handler = curr_handler;
+	} else {
+		/*
+		 * We might miss nr_cpus_user_nohz update and drop the duty
+		 * whereas other CPUs think that we keep handling the
+		 * timekeeping. To prevent this, we recheck its value after
+		 * we update the timer_do_timer_cpu and start over if
+		 * necessary.
+		 */
+		drop_recheck = true;
+	}
+#endif
+
+	prev_handler = update_do_timer_cpu(curr_handler, new_handler);
+
+	if (drop_recheck && atomic_read(&nr_cpus_user_nohz) > 0)
+		goto repeat;
+
+	if (likely(new_handler != TICK_DO_TIMER_NONE)) {
+		if (prev_handler == curr_handler)
+			return new_handler;
+		/*
+		 * Handler was probably changed under us. Whoever has
+		 * the duty might just drop it and we wouldn't know.
+		 * So, let's try again...
+		 */
+		goto repeat;
+	} else {
+		/* We either just dropped the duty or didn't have it. */
+		return prev_handler == cpu ? TICK_DO_TIMER_NONE : prev_handler;
+	}
+}
+
 static void tick_nohz_stop_idle(int cpu, ktime_t now)
 {
 	struct tick_sched *ts = &per_cpu(tick_cpu_sched, cpu);
@@ -187,6 +296,14 @@ static ktime_t tick_nohz_start_idle(int cpu, struct tick_sched *ts)
 	ktime_t now = ktime_get();
 
 	ts->idle_entrytime = now;
+
+#ifdef CONFIG_CPUSETS_NO_HZ
+	if (ts->user_nohz) {
+		ts->user_nohz = 0;
+		WARN_ON_ONCE(atomic_add_negative(-1, &nr_cpus_user_nohz));
+	}
+#endif
+
 	ts->idle_active = 1;
 	sched_clock_idle_sleep_event();
 	return now;
@@ -280,6 +397,7 @@ static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
 	ktime_t last_update, expires, ret = { .tv64 = 0 };
 	struct clock_event_device *dev = __get_cpu_var(tick_cpu_device).evtdev;
 	u64 time_delta;
+	int new_handler, prev_handler;
 
 
 	/* Read jiffies and the time when jiffies were updated last */
@@ -308,24 +426,25 @@ static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
 
 	/* Schedule the tick, if we are at least one jiffie off */
 	if ((long)delta_jiffies >= 1) {
+		/*
+		 * Check if adaptive nohz needs this CPU to take care
+		 * of the jiffies update. We also drop the duty in this
+		 * function if we can.
+		 */
+		prev_handler = ACCESS_ONCE(tick_do_timer_cpu);
+		new_handler = check_drop_timer_duty(cpu);
+		if (new_handler == cpu)
+			goto out;
 
 		/*
-		 * If this cpu is the one which updates jiffies, then
-		 * give up the assignment and let it be taken by the
-		 * cpu which runs the tick timer next, which might be
-		 * this cpu as well. If we don't drop this here the
-		 * jiffies might be stale and do_timer() never
-		 * invoked. Keep track of the fact that it was the one
-		 * which had the do_timer() duty last. If this cpu is
-		 * the one which had the do_timer() duty last, we
-		 * limit the sleep time to the timekeeping
-		 * max_deferement value which we retrieved
+		 * If this cpu is the one which had the do_timer()
+		 * duty last, we limit the sleep time to the
+		 * timekeeping max_deferement value which we retrieved
 		 * above. Otherwise we can sleep as long as we want.
 		 */
-		if (cpu == tick_do_timer_cpu) {
-			tick_do_timer_cpu = TICK_DO_TIMER_NONE;
+		if (prev_handler == cpu) {
 			ts->do_timer_last = 1;
-		} else if (tick_do_timer_cpu != TICK_DO_TIMER_NONE) {
+		} else if (new_handler != TICK_DO_TIMER_NONE) {
 			time_delta = KTIME_MAX;
 			ts->do_timer_last = 0;
 		} else if (!ts->do_timer_last) {
@@ -419,6 +538,10 @@ static bool can_stop_idle_tick(int cpu, struct tick_sched *ts)
 	 * invoked.
 	 */
 	if (unlikely(!cpu_online(cpu))) {
+		/*
+		 * FIXME: Might need some sort of protection
+		 * against CPU hotunplug for adaptive nohz.
+		 */
 		if (cpu == tick_do_timer_cpu)
 			tick_do_timer_cpu = TICK_DO_TIMER_NONE;
 	}
@@ -510,19 +633,24 @@ void tick_nohz_idle_enter(void)
 }
 
 #ifdef CONFIG_CPUSETS_NO_HZ
-static bool can_stop_adaptive_tick(void)
+static bool can_stop_adaptive_tick(struct tick_sched *ts)
 {
-	if (!sched_can_stop_tick())
-		return false;
+	int ret = true;
 
-	if (posix_cpu_timers_running(current))
-		return false;
+	if (!sched_can_stop_tick()
+		|| posix_cpu_timers_running(current)
+		|| rcu_pending(smp_processor_id()))
+		ret = false;
 
-	/* Is there a grace period to complete ? */
-	if (rcu_pending(smp_processor_id()))
-		return false;
+	if (ret && !ts->user_nohz) {
+		ts->user_nohz = 1;
+		atomic_inc(&nr_cpus_user_nohz);
+	} else if (!ret && ts->user_nohz) {
+		ts->user_nohz = 0;
+		WARN_ON_ONCE(atomic_add_negative(-1, &nr_cpus_user_nohz));
+	}
 
-	return true;
+	return ret;
 }
 
 static void tick_nohz_cpuset_stop_tick(struct tick_sched *ts)
@@ -541,7 +669,7 @@ static void tick_nohz_cpuset_stop_tick(struct tick_sched *ts)
 	if (!ts->tick_stopped && ts->nohz_mode == NOHZ_MODE_INACTIVE)
 		return;
 
-	if (!can_stop_adaptive_tick())
+	if (!can_stop_adaptive_tick(ts))
 		return;
 
 	/*
@@ -990,27 +1118,14 @@ void tick_nohz_exit_exception(struct pt_regs *regs)
 		tick_nohz_exit_kernel();
 }
 
-/*
- * Take the timer duty if nobody is taking care of it.
- * If a CPU already does and and it's in a nohz cpuset,
- * then take the charge so that it can switch to nohz mode.
- */
-static void tick_do_timer_check_handler(int cpu)
-{
-	int handler = tick_do_timer_cpu;
-
-	if (unlikely(handler == TICK_DO_TIMER_NONE)) {
-		tick_do_timer_cpu = cpu;
-	} else {
-		if (!cpuset_adaptive_nohz() &&
-		    cpuset_cpu_adaptive_nohz(handler))
-			tick_do_timer_cpu = cpu;
-	}
-}
-
-static void tick_nohz_restart_adaptive(void)
+static void tick_nohz_restart_adaptive(struct tick_sched *ts)
 {
 	tick_nohz_flush_current_times(true);
+
+	if (ts->user_nohz) {
+		ts->user_nohz = 0;
+		WARN_ON_ONCE(atomic_add_negative(-1, &nr_cpus_user_nohz));
+	}
 	tick_nohz_restart_sched_tick();
 	clear_thread_flag(TIF_NOHZ);
 	trace_printk("clear TIF_NOHZ\n");
@@ -1022,8 +1137,8 @@ void tick_nohz_check_adaptive(void)
 	struct tick_sched *ts = &__get_cpu_var(tick_cpu_sched);
 
 	if (ts->tick_stopped && !is_idle_task(current)) {
-		if (!can_stop_adaptive_tick())
-			tick_nohz_restart_adaptive();
+		if (!can_stop_adaptive_tick(ts))
+			tick_nohz_restart_adaptive(ts);
 	}
 }
 
@@ -1033,7 +1148,7 @@ void cpuset_exit_nohz_interrupt(void *unused)
 
 	trace_printk("IPI: Nohz exit\n");
 	if (ts->tick_stopped && !is_idle_task(current))
-		tick_nohz_restart_adaptive();
+		tick_nohz_restart_adaptive(ts);
 }
 
 /*
@@ -1122,7 +1237,17 @@ static enum hrtimer_restart tick_sched_timer(struct hrtimer *timer)
 	ktime_t now = ktime_get();
 	int cpu = smp_processor_id();
 
-	tick_do_timer_check_handler(cpu);
+#ifdef CONFIG_NO_HZ
+	/*
+	 * Check if the do_timer duty was dropped. We don't care about
+	 * concurrency: This happens only when the cpu in charge went
+	 * into a long sleep. If two cpus happen to assign themself to
+	 * this duty, then the jiffies update is still serialized by
+	 * xtime_lock.
+	 */
+	if (unlikely(tick_do_timer_cpu == TICK_DO_TIMER_NONE))
+		tick_do_timer_cpu = cpu;
+#endif
 
 	/* Check, if the jiffies need an update */
 	if (tick_do_timer_cpu == cpu)

@@ -54,6 +54,7 @@ enum tick_saved_jiffies {
  * @iowait_sleeptime:		Sum of the time slept in idle with sched tick stopped, with IO outstanding
  * @sleep_length:		Duration of the current idle sleep
  * @do_timer_lst:		CPU was the last one doing do_timer before going idle
+ * @user_nohz:			CPU wants to switch to adaptive nohz mode
  */
 struct tick_sched {
 	struct hrtimer			sched_timer;
@@ -77,6 +78,7 @@ struct tick_sched {
 	unsigned long			next_jiffies;
 	ktime_t				idle_expires;
 	int				do_timer_last;
+	int				user_nohz;
 };
 
 extern void __init tick_init(void);
