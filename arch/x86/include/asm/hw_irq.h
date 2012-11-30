@@ -177,6 +177,37 @@ static inline void unlock_vector_lock(void) {}
 static inline void __setup_vector_irq(int cpu) {}
 #endif
 
+#if defined(CONFIG_KERNEL_MODE_LINUX) && defined(CONFIG_X86_32)
+extern struct desc_struct idt_table[256];
+extern void (*test_ISR_and_handle_interrupt)(void);
+
+static inline unsigned long get_address_from_desc(struct desc_struct* s)
+{
+	return (s->a & 0x0000ffff) | (s->b & 0xffff0000);
+}
+
+static inline unsigned long get_intr_address(unsigned long vec)
+{
+	return get_address_from_desc(&idt_table[vec]);
+}
+
+static inline void handle_interrupt_manually(unsigned long vec)
+{
+	unsigned long handler;
+
+	handler = get_intr_address(vec);
+
+	__asm__ __volatile__ (
+	"pushfl\n\t"
+	"pushl %1\n\t"
+	"pushl $0f\n\t"
+	"jmp *%0\n"
+	"0:\n\t"
+	: : "r" (handler), "i" (__KERNEL_CS)
+	);
+}
+#endif
+
 #endif /* !ASSEMBLY_ */
 
 #endif /* _ASM_X86_HW_IRQ_H */

@@ -19,7 +19,12 @@
 #define NMI_STACK 3
 #define DEBUG_STACK 4
 #define MCE_STACK 5
+#ifndef CONFIG_KERNEL_MODE_LINUX
 #define N_EXCEPTION_STACKS 5  /* hw limit: 7 */
+#else
+#define KML_STACK 6
+#define N_EXCEPTION_STACKS 6  /* hw limit: 7 */
+#endif
 
 #define PUD_PAGE_SIZE		(_AC(1, UL) << PUD_SHIFT)
 #define PUD_PAGE_MASK		(~(PUD_PAGE_SIZE-1))

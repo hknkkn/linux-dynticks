@@ -1017,6 +1017,10 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
 
 	/* Get the faulting address: */
 	address = read_cr2();
+#ifdef CONFIG_KERNEL_MODE_LINUX
+	if (need_error_code_fix_on_page_fault(regs->cs))
+		error_code |= 0x4;
+#endif
 
 	/*
 	 * Detect and handle instructions that would cause a page fault for

@@ -2220,6 +2220,10 @@ config X86_DMA_REMAP
 
 source "net/Kconfig"
 
+if (X86_64 || (X86_32 && X86_WP_WORKS_OK)) && !PARAVIRT && !CC_STACKPROTECTOR
+source "kernel/Kconfig.kml"
+endif
+
 source "drivers/Kconfig"
 
 source "drivers/firmware/Kconfig"

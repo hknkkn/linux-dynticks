@@ -24,6 +24,9 @@ VERSION
 		__kernel_vsyscall;
 		__kernel_sigreturn;
 		__kernel_rt_sigreturn;
+#if defined(CONFIG_KERNEL_MODE_LINUX) && defined(CONFIG_X86_32)
+		__kernel_vsyscall_kml;
+#endif
 	local: *;
 	};
 }
@@ -35,3 +38,6 @@ VDSO32_PRELINK		= VDSO_PRELINK;
 VDSO32_vsyscall		= __kernel_vsyscall;
 VDSO32_sigreturn	= __kernel_sigreturn;
 VDSO32_rt_sigreturn	= __kernel_rt_sigreturn;
+#if defined(CONFIG_KERNEL_MODE_LINUX) && defined(CONFIG_X86_32)
+VDSO32_vsyscall_kml	= __kernel_vsyscall_kml;
+#endif

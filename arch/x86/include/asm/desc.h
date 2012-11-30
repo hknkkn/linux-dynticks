@@ -98,7 +98,10 @@ static inline int desc_empty(const void *ptr)
 #define store_idt(dtr)				native_store_idt(dtr)
 #define store_tr(tr)				(tr = native_store_tr())
 
-#define load_TLS(t, cpu)			native_load_tls(t, cpu)
+#define load_TLS__nmi_unsafe(t, cpu)		native_load_tls__nmi_unsafe(t, cpu)
+#ifdef CONFIG_X86_64
+#define load_TLS(t, cpu)			load_TLS__nmi_unsafe(t, cpu)
+#endif
 #define set_ldt					native_set_ldt
 
 #define write_ldt_entry(dt, entry, desc)	native_write_ldt_entry(dt, entry, desc)
@@ -112,25 +115,47 @@ static inline void paravirt_alloc_ldt(struct desc_struct *ldt, unsigned entries)
 static inline void paravirt_free_ldt(struct desc_struct *ldt, unsigned entries)
 {
 }
-#endif	/* CONFIG_PARAVIRT */
+#endif /* CONFIG_PARAVIRT */
 
 #define store_ldt(ldt) asm("sldt %0" : "=m"(ldt))
 
 static inline void native_write_idt_entry(gate_desc *idt, int entry, const gate_desc *gate)
 {
+#ifdef CONFIG_KERNEL_MODE_LINUX
+	NMI_DECLS_GSLDTR
+	preempt_disable();
+	NMI_SAVE_GSLDTR;
+#endif
 	memcpy(&idt[entry], gate, sizeof(*gate));
+#ifdef CONFIG_KERNEL_MODE_LINUX
+	NMI_RESTORE_GSLDTR;
+	preempt_enable();
+#endif
 }
 
 static inline void native_write_ldt_entry(struct desc_struct *ldt, int entry, const void *desc)
 {
+#ifdef CONFIG_KERNEL_MODE_LINUX
+	NMI_DECLS_GSLDTR
+	preempt_disable();
+	NMI_SAVE_GSLDTR;
+#endif
 	memcpy(&ldt[entry], desc, 8);
+#ifdef CONFIG_KERNEL_MODE_LINUX
+	NMI_RESTORE_GSLDTR;
+	preempt_enable();
+#endif
 }
 
 static inline void
 native_write_gdt_entry(struct desc_struct *gdt, int entry, const void *desc, int type)
 {
 	unsigned int size;
-
+#ifdef CONFIG_KERNEL_MODE_LINUX
+	NMI_DECLS_GSLDTR
+	preempt_disable();
+	NMI_SAVE_GSLDTR;
+#endif
 	switch (type) {
 	case DESC_TSS:	size = sizeof(tss_desc);	break;
 	case DESC_LDT:	size = sizeof(ldt_desc);	break;
@@ -138,6 +163,10 @@ native_write_gdt_entry(struct desc_struct *gdt, int entry, const void *desc, int
 	}
 
 	memcpy(&gdt[entry], desc, size);
+#ifdef CONFIG_KERNEL_MODE_LINUX
+	NMI_RESTORE_GSLDTR;
+	preempt_enable();
+#endif
 }
 
 static inline void pack_descriptor(struct desc_struct *desc, unsigned long base,
@@ -192,11 +221,24 @@ static inline void __set_tss_desc(unsigned cpu, unsigned int entry, void *addr)
 
 #define set_tss_desc(cpu, addr) __set_tss_desc(cpu, GDT_ENTRY_TSS, addr)
 
+#ifdef CONFIG_KERNEL_MODE_LINUX
+
+static inline void clear_busy_flag_in_tss_descriptor(unsigned int cpu)
+{
+	get_cpu_gdt_table(cpu)[GDT_ENTRY_TSS].b &= (~0x00000200);
+}
+
+#endif
+
 static inline void native_set_ldt(const void *addr, unsigned int entries)
 {
-	if (likely(entries == 0))
+	if (likely(entries == 0)) {
+#if defined(CONFIG_KERNEL_MODE_LINUX) && defined(CONFIG_X86_32)
+		unsigned cpu = smp_processor_id();
+		per_cpu(init_tss, cpu).x86_tss.ldt = 0;
+#endif
 		asm volatile("lldt %w0"::"q" (0));
-	else {
+	} else {
 		unsigned cpu = smp_processor_id();
 		ldt_desc ldt;
 
@@ -204,6 +246,9 @@ static inline void native_set_ldt(const void *addr, unsigned int entries)
 				      entries * LDT_ENTRY_SIZE - 1);
 		write_gdt_entry(get_cpu_gdt_table(cpu), GDT_ENTRY_LDT,
 				&ldt, DESC_LDT);
+#if defined(CONFIG_KERNEL_MODE_LINUX) && defined(CONFIG_X86_32)
+		per_cpu(init_tss, cpu).x86_tss.ldt = GDT_ENTRY_LDT * 8;
+#endif
 		asm volatile("lldt %w0"::"q" (GDT_ENTRY_LDT*8));
 	}
 }
@@ -242,7 +287,7 @@ static inline unsigned long native_store_tr(void)
 	return tr;
 }
 
-static inline void native_load_tls(struct thread_struct *t, unsigned int cpu)
+static inline void native_load_tls__nmi_unsafe(struct thread_struct *t, unsigned int cpu)
 {
 	struct desc_struct *gdt = get_cpu_gdt_table(cpu);
 	unsigned int i;
@@ -339,10 +384,16 @@ static inline void _set_gate(int gate, unsigned type, void *addr,
  * Pentium F0 0F bugfix can have resulted in the mapped
  * IDT being write-protected.
  */
-static inline void set_intr_gate(unsigned int n, void *addr)
+static inline void set_intr_gate_ist(unsigned int n, void *addr, unsigned int ist)
 {
 	BUG_ON((unsigned)n > 0xFF);
-	_set_gate(n, GATE_INTERRUPT, addr, 0, 0, __KERNEL_CS);
+	_set_gate(n, GATE_INTERRUPT, addr, 0, ist, __KERNEL_CS);
+}
+
+static inline void set_system_intr_gate_ist(unsigned int n, void *addr, unsigned ist)
+{
+	BUG_ON((unsigned)n > 0xFF);
+	_set_gate(n, GATE_INTERRUPT, addr, 0x3, ist, __KERNEL_CS);
 }
 
 extern int first_system_vector;
@@ -360,6 +411,15 @@ static inline void alloc_system_vector(int vector)
 	}
 }
 
+static inline void set_intr_gate(unsigned int n, void *addr)
+{
+#if defined(CONFIG_KERNEL_MODE_LINUX) && defined(CONFIG_X86_64)
+	set_intr_gate_ist(n, addr, KML_STACK);
+#else
+	set_intr_gate_ist(n, addr, 0);
+#endif
+}
+
 static inline void alloc_intr_gate(unsigned int n, void *addr)
 {
 	alloc_system_vector(n);
@@ -371,20 +431,24 @@ static inline void alloc_intr_gate(unsigned int n, void *addr)
  */
 static inline void set_system_intr_gate(unsigned int n, void *addr)
 {
-	BUG_ON((unsigned)n > 0xFF);
-	_set_gate(n, GATE_INTERRUPT, addr, 0x3, 0, __KERNEL_CS);
+#if defined(CONFIG_KERNEL_MODE_LINUX) && defined(CONFIG_X86_64)
+	set_system_intr_gate_ist(n, addr, KML_STACK);
+#else
+	set_system_intr_gate_ist(n, addr, 0);
+#endif
 }
+
+#ifdef CONFIG_KERNEL_MODE_LINUX
+static inline void set_system_intr_gate_orig(unsigned int n, void *addr)
+{
+	set_system_intr_gate_ist(n, addr, 0);
+}
+#endif
 
 static inline void set_system_trap_gate(unsigned int n, void *addr)
 {
 	BUG_ON((unsigned)n > 0xFF);
 	_set_gate(n, GATE_TRAP, addr, 0x3, 0, __KERNEL_CS);
-}
-
-static inline void set_trap_gate(unsigned int n, void *addr)
-{
-	BUG_ON((unsigned)n > 0xFF);
-	_set_gate(n, GATE_TRAP, addr, 0, 0, __KERNEL_CS);
 }
 
 static inline void set_task_gate(unsigned int n, unsigned int gdt_entry)
@@ -393,16 +457,17 @@ static inline void set_task_gate(unsigned int n, unsigned int gdt_entry)
 	_set_gate(n, GATE_TASK, (void *)0, 0, 0, (gdt_entry<<3));
 }
 
-static inline void set_intr_gate_ist(int n, void *addr, unsigned ist)
+#ifdef CONFIG_KERNEL_MODE_LINUX
+static inline void set_intr_gate_orig(unsigned int n, void *addr)
 {
-	BUG_ON((unsigned)n > 0xFF);
-	_set_gate(n, GATE_INTERRUPT, addr, 0, ist, __KERNEL_CS);
+	set_intr_gate_ist(n, addr, 0);
 }
+#endif
 
-static inline void set_system_intr_gate_ist(int n, void *addr, unsigned ist)
+static inline void set_trap_gate(unsigned int n, void *addr)
 {
 	BUG_ON((unsigned)n > 0xFF);
-	_set_gate(n, GATE_INTERRUPT, addr, 0x3, ist, __KERNEL_CS);
+	_set_gate(n, GATE_TRAP, addr, 0, 0, __KERNEL_CS);
 }
 
 #endif /* _ASM_X86_DESC_H */

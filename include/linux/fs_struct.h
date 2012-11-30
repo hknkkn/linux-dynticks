@@ -51,4 +51,8 @@ static inline void get_fs_root_and_pwd(struct fs_struct *fs, struct path *root,
 	spin_unlock(&fs->lock);
 }
 
+#ifdef CONFIG_KERNEL_MODE_LINUX
+extern struct path* boot_root;
+#endif
+
 #endif /* _LINUX_FS_STRUCT_H */

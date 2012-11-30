@@ -1440,6 +1440,10 @@ static void __init __io_apic_setup_irqs(unsigned int ioapic_idx)
 	}
 }
 
+#if defined(CONFIG_KERNEL_MODE_LINUX) && defined(CONFIG_X86_32)
+static void IO_APIC_test_ISR_and_handle_interrupt(void);
+#endif
+
 static void __init setup_IO_APIC_irqs(void)
 {
 	unsigned int ioapic_idx;
@@ -1448,6 +1452,10 @@ static void __init setup_IO_APIC_irqs(void)
 
 	for (ioapic_idx = 0; ioapic_idx < nr_ioapics; ioapic_idx++)
 		__io_apic_setup_irqs(ioapic_idx);
+
+#if defined(CONFIG_KERNEL_MODE_LINUX) && defined(CONFIG_X86_32)
+	test_ISR_and_handle_interrupt = IO_APIC_test_ISR_and_handle_interrupt;
+#endif
 }
 
 /*
@@ -3655,6 +3663,45 @@ int acpi_get_override_irq(u32 gsi, int *trigger, int *polarity)
 	*polarity = irq_polarity(idx);
 	return 0;
 }
+
+#if defined(CONFIG_KERNEL_MODE_LINUX) && defined(CONFIG_X86_32)
+
+static __inline__ int ffsr0(int x)
+{
+	int r;
+
+	__asm__ ("bsrl %1, %0\n\t"
+		 "jnz 1f\n\t"
+		 "movl $-1, %0\n"
+		 "1:"
+		 : "=r" (r) : "rm" (x));
+
+	return r;
+}
+
+static void IO_APIC_test_ISR_and_handle_interrupt(void)
+{
+	int i;
+
+	for (i = 7; i >= 0; i--) {
+		unsigned long v;
+		int idx;
+
+		v = apic_read(APIC_ISR + i * 0x10);
+
+		idx = ffsr0(v);
+
+		if (idx < 0) {
+			continue;
+		}
+
+		handle_interrupt_manually(idx + i * 32);
+
+		return;
+	}
+
+}
+#endif
 
 /*
  * This function currently is only a helper for the i386 smp boot process where

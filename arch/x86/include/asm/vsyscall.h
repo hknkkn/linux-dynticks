@@ -7,6 +7,11 @@ enum vsyscall_num {
 	__NR_vgetcpu,
 };
 
+#ifdef CONFIG_KERNEL_MODE_LINUX
+/* XXX : The following offset will need to be increased
+	 if the size of vsyscall-kml.so exceeds a page size. */
+#define VSYSCALL_KML_START (-12UL << 20)
+#endif
 #define VSYSCALL_START (-10UL << 20)
 #define VSYSCALL_SIZE 1024
 #define VSYSCALL_END (-2UL << 20)

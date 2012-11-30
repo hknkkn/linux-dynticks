@@ -1050,7 +1050,7 @@ __stubs_start:
 	.long	__irq_invalid			@  c
 	.long	__irq_invalid			@  d
 	.long	__irq_invalid			@  e
-	.long	__irq_invalid			@  f
+	.long	__irq_usr			@  f
 
 /*
  * Data abort dispatcher
@@ -1073,7 +1073,7 @@ __stubs_start:
 	.long	__dabt_invalid			@  c
 	.long	__dabt_invalid			@  d
 	.long	__dabt_invalid			@  e
-	.long	__dabt_invalid			@  f
+	.long	__dabt_usr			@  f
 
 /*
  * Prefetch abort dispatcher
@@ -1096,7 +1096,7 @@ __stubs_start:
 	.long	__pabt_invalid			@  c
 	.long	__pabt_invalid			@  d
 	.long	__pabt_invalid			@  e
-	.long	__pabt_invalid			@  f
+	.long	__pabt_usr			@  f
 
 /*
  * Undef instr entry dispatcher
@@ -1119,7 +1119,7 @@ __stubs_start:
 	.long	__und_invalid			@  c
 	.long	__und_invalid			@  d
 	.long	__und_invalid			@  e
-	.long	__und_invalid			@  f
+	.long	__und_usr			@  f
 
 	.align	5
 

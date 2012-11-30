@@ -33,11 +33,14 @@ static void set_tls_desc(struct task_struct *p, int idx,
 	struct thread_struct *t = &p->thread;
 	struct desc_struct *desc = &t->tls_array[idx - GDT_ENTRY_TLS_MIN];
 	int cpu;
+	NMI_DECLS_GS
 
 	/*
 	 * We must not get preempted while modifying the TLS.
 	 */
 	cpu = get_cpu();
+
+	NMI_SAVE_GS;
 
 	while (n-- > 0) {
 		if (LDT_empty(info))
@@ -49,7 +52,9 @@ static void set_tls_desc(struct task_struct *p, int idx,
 	}
 
 	if (t == &current->thread)
-		load_TLS(t, cpu);
+		load_TLS__nmi_unsafe(t, cpu);
+
+	NMI_RESTORE_GS;
 
 	put_cpu();
 }

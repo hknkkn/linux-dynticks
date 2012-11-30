@@ -289,6 +289,10 @@ endmenu
 
 source "net/Kconfig"
 
+if (MMU)
+source "kernel/Kconfig.kml"
+endif
+
 source "drivers/Kconfig"
 
 source "fs/Kconfig"

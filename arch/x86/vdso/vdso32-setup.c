@@ -274,6 +274,25 @@ static void map_compat_vdso(int map)
 
 #endif	/* CONFIG_X86_64 */
 
+#if defined(CONFIG_KERNEL_MODE_LINUX) && defined(CONFIG_X86_32)
+extern const char kml_call_table;
+extern void __kernel_vsyscall_kml;
+
+static void __init kml_call_table_fixup(const char* base)
+{
+	char* p;
+	unsigned long* to_be_filled;
+
+	p = (char*)VDSO32_SYMBOL(base, vsyscall_kml);
+	to_be_filled = (unsigned long*)(p + 3);
+	*to_be_filled = (unsigned long)&kml_call_table;
+
+	return;
+}
+#else
+#define kml_call_table_fixup(B)
+#endif
+
 int __init sysenter_setup(void)
 {
 	void *syscall_page = (void *)get_zeroed_page(GFP_ATOMIC);
@@ -297,6 +316,7 @@ int __init sysenter_setup(void)
 		vsyscall_len = &vdso32_int80_end - &vdso32_int80_start;
 	}
 
+	kml_call_table_fixup(vsyscall);
 	memcpy(syscall_page, vsyscall, vsyscall_len);
 	relocate_vdso(syscall_page);
 

@@ -194,6 +194,8 @@ kernel-docs.txt
 	- listing of various WWW + books that document kernel internals.
 kernel-parameters.txt
 	- summary listing of command line / boot prompt args for the kernel.
+kml.txt
+	- info on Kernel Mode Linux.
 kobject.txt
 	- info of the kobject infrastructure of the Linux kernel.
 kprobes.txt

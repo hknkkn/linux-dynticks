@@ -269,13 +269,28 @@ extern int force_personality32;
 
 struct task_struct;
 
-#define	ARCH_DLINFO_IA32(vdso_enabled)					\
+#define	ARCH_DLINFO_IA32_ORIG(vdso_enabled)				\
 do {									\
 	if (vdso_enabled) {						\
 		NEW_AUX_ENT(AT_SYSINFO,	VDSO_ENTRY);			\
 		NEW_AUX_ENT(AT_SYSINFO_EHDR, VDSO_CURRENT_BASE);	\
 	}								\
 } while (0)
+
+#define ARCH_DLINFO_IA32_KML(vdso_enabled)				\
+do {									\
+	if (vdso_enabled) {						\
+		NEW_AUX_ENT(AT_SYSINFO,					\
+			    (kernel_mode ? VDSO_KML_ENTRY : VDSO_ENTRY));\
+		NEW_AUX_ENT(AT_SYSINFO_EHDR, VDSO_CURRENT_BASE);	\
+	}								\
+} while (0)
+
+#ifndef CONFIG_KERNEL_MODE_LINUX
+#define ARCH_DLINFO_IA32 ARCH_DLINFO_IA32_ORIG
+#else
+#define ARCH_DLINFO_IA32 ARCH_DLINFO_IA32_KML
+#endif
 
 #ifdef CONFIG_X86_32
 
@@ -284,6 +299,11 @@ do {									\
 #define VDSO_HIGH_BASE		(__fix_to_virt(FIX_VDSO))
 
 #define ARCH_DLINFO		ARCH_DLINFO_IA32(vdso_enabled)
+
+#ifdef CONFIG_KERNEL_MODE_LINUX
+#define VDSO_KML_ENTRY \
+	((unsigned long) VDSO32_SYMBOL(VDSO_CURRENT_BASE, vsyscall_kml))
+#endif
 
 /* update AT_VECTOR_SIZE_ARCH if the number of NEW_AUX_ENT entries changes */
 
@@ -294,12 +314,36 @@ do {									\
 /* 1GB for 64bit, 8MB for 32bit */
 #define STACK_RND_MASK (test_thread_flag(TIF_ADDR32) ? 0x7ff : 0x3fffff)
 
-#define ARCH_DLINFO							\
+#define ARCH_DLINFO_ORIG						\
 do {									\
 	if (vdso_enabled)						\
 		NEW_AUX_ENT(AT_SYSINFO_EHDR,				\
 			    (unsigned long)current->mm->context.vdso);	\
 } while (0)
+
+#ifdef CONFIG_KERNEL_MODE_LINUX
+extern void kml_call_entry(void);
+#endif
+
+#define VDSO_KML_ENTRY \
+	((unsigned long) kml_call_entry)
+
+#define ARCH_DLINFO_KML							\
+do {									\
+	if (vdso_enabled) {						\
+		if (kernel_mode) {					\
+			NEW_AUX_ENT(AT_SYSINFO, VDSO_KML_ENTRY);	\
+		}							\
+		NEW_AUX_ENT(AT_SYSINFO_EHDR,				\
+			    (unsigned long)current->mm->context.vdso);	\
+	}								\
+} while (0)
+
+#ifndef CONFIG_KERNEL_MODE_LINUX
+#define ARCH_DLINFO ARCH_DLINFO_ORIG
+#else
+#define ARCH_DLINFO ARCH_DLINFO_KML
+#endif
 
 #define ARCH_DLINFO_X32							\
 do {									\
@@ -314,7 +358,7 @@ do {									\
 if (test_thread_flag(TIF_X32))						\
 	ARCH_DLINFO_X32;						\
 else									\
-	ARCH_DLINFO_IA32(sysctl_vsyscall32)
+	ARCH_DLINFO_IA32_ORIG(sysctl_vsyscall32)
 
 #define COMPAT_ELF_ET_DYN_BASE	(TASK_UNMAPPED_BASE + 0x1000000)
 
