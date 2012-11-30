@@ -13,6 +13,7 @@
 #include <linux/gfp.h>
 #include <linux/slab.h>
 #include <linux/percpu.h>
+#include <linux/tick.h>
 
 #include "base.h"
 
@@ -64,9 +65,87 @@ static ssize_t __ref store_online(struct device *dev,
 }
 static DEVICE_ATTR(online, 0644, show_online, store_online);
 
+extern DEFINE_PER_CPU(int, nohz_on);
+
+static ssize_t show_nohz(struct device *dev,
+			   struct device_attribute *attr,
+			   char *buf)
+{
+	struct cpu *cpu = container_of(dev, struct cpu, dev);
+
+	return sprintf(buf, "%d\n", per_cpu(nohz_on, cpu->dev.id));
+}
+void tick_setup_sched_timer_call(void* ignore)
+{
+	printk(KERN_INFO "setting up sched timer on cpu %d\n", smp_processor_id());
+	tick_setup_sched_timer();
+	printk(KERN_INFO "done setting up sched timer on cpu %d\n", smp_processor_id());
+}
+void tick_cancel_sched_timer_call(void* ignore)
+{
+	printk(KERN_INFO "canceling sched timer on cpu %d\n", smp_processor_id());
+	tick_cancel_sched_timer(smp_processor_id());
+	printk(KERN_INFO "done canceling sched timer on cpu %d\n", smp_processor_id());
+}
+static ssize_t __ref store_nohz(struct device *dev,
+				  struct device_attribute *attr,
+				  const char *buf, size_t count)
+{
+	/*
+	 * 2 modes of nohz is available:
+	 *     1) echo 1 > /sys/devices/...../cpu#/nohz
+	 *        This slows down the tick. New tick
+	 *        period can be echoed into
+	 *        /sys/sched_nt/tsp and all nohz_1 cpus 
+	 *        will change their tick periods to this val.
+	 *     2) echo 2 > /sys/devices/...../cpu#/nohz
+	 *	  This cancels the tick timer on that cpu.
+	 */
+	struct cpu *cpu = container_of(dev, struct cpu, dev);
+	int old_mode = per_cpu(nohz_on, cpu->dev.id);
+	int new_mode = buf[0] - '0';
+	int ret;
+
+	if(new_mode < 0 || new_mode > 2)
+		return -EINVAL;
+
+	if(new_mode == old_mode)
+		return count;
+
+	per_cpu(nohz_on, cpu->dev.id) = new_mode;
+
+	if(new_mode == 2) { 
+		printk(KERN_INFO
+				"sending cancel sched timer to cpu %d on cpu %d\n",
+				cpu->dev.id,
+				smp_processor_id());
+		smp_call_function_single(cpu->dev.id,
+				tick_cancel_sched_timer_call, NULL, 0);
+		printk(KERN_INFO
+						"sent cancel sched timer to cpu %d on cpu %d\n",
+						cpu->dev.id,
+						smp_processor_id());
+	} else if (old_mode == 2) {
+		printk(KERN_INFO
+				"sending setup sched timer to cpu %d on cpu %d\n",
+				cpu->dev.id,
+				smp_processor_id());
+		smp_call_function_single(cpu->dev.id,
+				tick_setup_sched_timer_call,NULL,0);
+		printk(KERN_INFO
+						"sent setup sched timer to cpu %d on cpu %d\n",
+						cpu->dev.id,
+						smp_processor_id());
+	}
+
+	return count;
+}
+static DEVICE_ATTR(nohz, 0666, show_nohz, store_nohz);
+
 static void __cpuinit register_cpu_control(struct cpu *cpu)
 {
 	device_create_file(&cpu->dev, &dev_attr_online);
+	device_create_file(&cpu->dev, &dev_attr_nohz);
 }
 void unregister_cpu(struct cpu *cpu)
 {
@@ -75,6 +154,7 @@ void unregister_cpu(struct cpu *cpu)
 	unregister_cpu_under_node(logical_cpu, cpu_to_node(logical_cpu));
 
 	device_remove_file(&cpu->dev, &dev_attr_online);
+	device_remove_file(&cpu->dev, &dev_attr_nohz);
 
 	device_unregister(&cpu->dev);
 	per_cpu(cpu_sys_devices, logical_cpu) = NULL;
