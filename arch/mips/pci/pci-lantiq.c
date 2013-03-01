@@ -95,7 +95,7 @@ static inline u32 ltq_calc_bar11mask(void)
 	return bar11mask;
 }
 
-static int __devinit ltq_pci_startup(struct platform_device *pdev)
+static int ltq_pci_startup(struct platform_device *pdev)
 {
 	struct device_node *node = pdev->dev.of_node;
 	const __be32 *req_mask, *bus_clk;
@@ -201,7 +201,7 @@ static int __devinit ltq_pci_startup(struct platform_device *pdev)
 	return 0;
 }
 
-static int __devinit ltq_pci_probe(struct platform_device *pdev)
+static int ltq_pci_probe(struct platform_device *pdev)
 {
 	struct resource *res_cfg, *res_bridge;
 
@@ -214,13 +214,13 @@ static int __devinit ltq_pci_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	ltq_pci_membase = devm_request_and_ioremap(&pdev->dev, res_bridge);
-	ltq_pci_mapped_cfg = devm_request_and_ioremap(&pdev->dev, res_cfg);
+	ltq_pci_membase = devm_ioremap_resource(&pdev->dev, res_bridge);
+	if (IS_ERR(ltq_pci_membase))
+		return PTR_ERR(ltq_pci_membase);
 
-	if (!ltq_pci_membase || !ltq_pci_mapped_cfg) {
-		dev_err(&pdev->dev, "failed to remap resources\n");
-		return -ENOMEM;
-	}
+	ltq_pci_mapped_cfg = devm_ioremap_resource(&pdev->dev, res_cfg);
+	if (IS_ERR(ltq_pci_mapped_cfg))
+		return PTR_ERR(ltq_pci_mapped_cfg);
 
 	ltq_pci_startup(pdev);
 

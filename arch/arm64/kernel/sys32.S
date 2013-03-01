@@ -26,25 +26,6 @@
 /*
  * System call wrappers for the AArch32 compatibility layer.
  */
-compat_sys_fork_wrapper:
-	mov	x0, sp
-	b	compat_sys_fork
-ENDPROC(compat_sys_fork_wrapper)
-
-compat_sys_vfork_wrapper:
-	mov	x0, sp
-	b	compat_sys_vfork
-ENDPROC(compat_sys_vfork_wrapper)
-
-compat_sys_execve_wrapper:
-	mov	x3, sp
-	b	compat_sys_execve
-ENDPROC(compat_sys_execve_wrapper)
-
-compat_sys_clone_wrapper:
-	mov	x5, sp
-	b	compat_sys_clone
-ENDPROC(compat_sys_clone_wrapper)
 
 compat_sys_sigreturn_wrapper:
 	mov	x0, sp
@@ -57,11 +38,6 @@ compat_sys_rt_sigreturn_wrapper:
 	mov	x27, #0		// prevent syscall restart handling (why)
 	b	compat_sys_rt_sigreturn
 ENDPROC(compat_sys_rt_sigreturn_wrapper)
-
-compat_sys_sigaltstack_wrapper:
-	ldr	x2, [sp, #S_COMPAT_SP]
-	b	compat_do_sigaltstack
-ENDPROC(compat_sys_sigaltstack_wrapper)
 
 compat_sys_statfs64_wrapper:
 	mov	w3, #84

@@ -146,7 +146,7 @@ static struct watchdog_device pnx4008_wdd = {
 	.max_timeout = MAX_HEARTBEAT,
 };
 
-static int __devinit pnx4008_wdt_probe(struct platform_device *pdev)
+static int pnx4008_wdt_probe(struct platform_device *pdev)
 {
 	struct resource *r;
 	int ret = 0;
@@ -155,9 +155,9 @@ static int __devinit pnx4008_wdt_probe(struct platform_device *pdev)
 		heartbeat = DEFAULT_HEARTBEAT;
 
 	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	wdt_base = devm_request_and_ioremap(&pdev->dev, r);
-	if (!wdt_base)
-		return -EADDRINUSE;
+	wdt_base = devm_ioremap_resource(&pdev->dev, r);
+	if (IS_ERR(wdt_base))
+		return PTR_ERR(wdt_base);
 
 	wdt_clk = clk_get(&pdev->dev, NULL);
 	if (IS_ERR(wdt_clk))
@@ -192,7 +192,7 @@ out:
 	return ret;
 }
 
-static int __devexit pnx4008_wdt_remove(struct platform_device *pdev)
+static int pnx4008_wdt_remove(struct platform_device *pdev)
 {
 	watchdog_unregister_device(&pnx4008_wdd);
 
@@ -217,7 +217,7 @@ static struct platform_driver platform_wdt_driver = {
 		.of_match_table = of_match_ptr(pnx4008_wdt_match),
 	},
 	.probe = pnx4008_wdt_probe,
-	.remove = __devexit_p(pnx4008_wdt_remove),
+	.remove = pnx4008_wdt_remove,
 };
 
 module_platform_driver(platform_wdt_driver);

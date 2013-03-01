@@ -3,7 +3,6 @@
  *
  * Copyright (C) 2000 Silicon Graphics, Inc.
  * Written by Ulf Carlsson (ulfc@engr.sgi.com)
- * sys32_execve from ia64/ia32 code, Feb 2000, Kanoj Sarcar (kanoj@sgi.com)
  */
 #include <linux/compiler.h>
 #include <linux/mm.h>
@@ -77,26 +76,6 @@ out:
 	return error;
 }
 
-/*
- * sys_execve() executes a new program.
- */
-asmlinkage int sys32_execve(nabi_no_regargs struct pt_regs regs)
-{
-	int error;
-	struct filename *filename;
-
-	filename = getname(compat_ptr(regs.regs[4]));
-	error = PTR_ERR(filename);
-	if (IS_ERR(filename))
-		goto out;
-	error = compat_do_execve(filename->name, compat_ptr(regs.regs[5]),
-				 compat_ptr(regs.regs[6]), &regs);
-	putname(filename);
-
-out:
-	return error;
-}
-
 #define RLIM_INFINITY32	0x7fffffff
 #define RESOURCE32(x) ((x > RLIM_INFINITY32) ? RLIM_INFINITY32 : x)
 
@@ -138,22 +117,6 @@ SYSCALL_DEFINE6(32_pwrite, unsigned int, fd, const char __user *, buf,
 	size_t, count, u32, unused, u64, a4, u64, a5)
 {
 	return sys_pwrite64(fd, buf, count, merge_64(a4, a5));
-}
-
-SYSCALL_DEFINE2(32_sched_rr_get_interval, compat_pid_t, pid,
-	struct compat_timespec __user *, interval)
-{
-	struct timespec t;
-	int ret;
-	mm_segment_t old_fs = get_fs();
-
-	set_fs(KERNEL_DS);
-	ret = sys_sched_rr_get_interval(pid, (struct timespec __user *)&t);
-	set_fs(old_fs);
-	if (put_user (t.tv_sec, &interval->tv_sec) ||
-	    __put_user(t.tv_nsec, &interval->tv_nsec))
-		return -EFAULT;
-	return ret;
 }
 
 #ifdef CONFIG_SYSVIPC
@@ -316,27 +279,6 @@ asmlinkage long sys32_fallocate(int fd, int mode, unsigned offset_a2,
 	                     merge_64(len_a4, len_a5));
 }
 
-save_static_function(sys32_clone);
-static int noinline __used
-_sys32_clone(nabi_no_regargs struct pt_regs regs)
-{
-	unsigned long clone_flags;
-	unsigned long newsp;
-	int __user *parent_tidptr, *child_tidptr;
-
-	clone_flags = regs.regs[4];
-	newsp = regs.regs[5];
-	if (!newsp)
-		newsp = regs.regs[29];
-	parent_tidptr = (int __user *) regs.regs[6];
-
-	/* Use __dummy4 instead of getting it off the stack, so that
-	   syscall() works.  */
-	child_tidptr = (int __user *) __dummy4;
-	return do_fork(clone_flags, newsp, &regs, 0,
-	               parent_tidptr, child_tidptr);
-}
-
 asmlinkage long sys32_lookup_dcookie(u32 a0, u32 a1, char __user *buf,
 	size_t len)
 {
@@ -348,11 +290,4 @@ SYSCALL_DEFINE6(32_fanotify_mark, int, fanotify_fd, unsigned int, flags,
 {
 	return sys_fanotify_mark(fanotify_fd, flags, merge_64(a3, a4),
 				 dfd, pathname);
-}
-
-SYSCALL_DEFINE6(32_futex, u32 __user *, uaddr, int, op, u32, val,
-		struct compat_timespec __user *, utime, u32 __user *, uaddr2,
-		u32, val3)
-{
-	return compat_sys_futex(uaddr, op, val, utime, uaddr2, val3);
 }

@@ -63,18 +63,6 @@ struct dm_io {
 };
 
 /*
- * For bio-based dm.
- * One of these is allocated per target within a bio.  Hopefully
- * this will be simplified out one day.
- */
-struct dm_target_io {
-	struct dm_io *io;
-	struct dm_target *ti;
-	union map_info info;
-	struct bio clone;
-};
-
-/*
  * For request-based dm.
  * One of these is allocated per request.
  */
@@ -330,7 +318,6 @@ static void __exit dm_exit(void)
 	/*
 	 * Should be empty by this point.
 	 */
-	idr_remove_all(&_minor_idr);
 	idr_destroy(&_minor_idr);
 }
 
@@ -639,7 +626,6 @@ static void dec_pending(struct dm_io *io, int error)
 			queue_io(md, bio);
 		} else {
 			/* done with normal IO or empty flush */
-			trace_block_bio_complete(md->queue, bio, io_error);
 			bio_endio(bio, io_error);
 		}
 	}
@@ -657,7 +643,7 @@ static void clone_endio(struct bio *bio, int error)
 		error = -EIO;
 
 	if (endio) {
-		r = endio(tio->ti, bio, error, &tio->info);
+		r = endio(tio->ti, bio, error);
 		if (r < 0 || r == DM_ENDIO_REQUEUE)
 			/*
 			 * error and requeue request are handled
@@ -740,8 +726,14 @@ static void rq_completed(struct mapped_device *md, int rw, int run_queue)
 	if (!md_in_flight(md))
 		wake_up(&md->wait);
 
+	/*
+	 * Run this off this callpath, as drivers could invoke end_io while
+	 * inside their request_fn (and holding the queue lock). Calling
+	 * back into ->request_fn() could deadlock attempting to grab the
+	 * queue lock again.
+	 */
 	if (run_queue)
-		blk_run_queue(md->queue);
+		blk_run_queue_async(md->queue);
 
 	/*
 	 * dm_put() must be at the end of this function. See the comment above
@@ -1010,7 +1002,7 @@ static void __map_bio(struct dm_target *ti, struct dm_target_io *tio)
 	 */
 	atomic_inc(&tio->io->io_count);
 	sector = clone->bi_sector;
-	r = ti->type->map(ti, clone, &tio->info);
+	r = ti->type->map(ti, clone);
 	if (r == DM_MAPIO_REMAPPED) {
 		/* the bio has been remapped so dispatch it */
 
@@ -1105,6 +1097,7 @@ static struct dm_target_io *alloc_tio(struct clone_info *ci,
 	tio->io = ci->io;
 	tio->ti = ti;
 	memset(&tio->info, 0, sizeof(tio->info));
+	tio->target_request_nr = 0;
 
 	return tio;
 }
@@ -1115,7 +1108,7 @@ static void __issue_target_request(struct clone_info *ci, struct dm_target *ti,
 	struct dm_target_io *tio = alloc_tio(ci, ti, ci->bio->bi_max_vecs);
 	struct bio *clone = &tio->clone;
 
-	tio->info.target_request_nr = request_nr;
+	tio->target_request_nr = request_nr;
 
 	/*
 	 * Discard requests require the bio's inline iovecs be initialized.
@@ -1168,10 +1161,32 @@ static void __clone_and_map_simple(struct clone_info *ci, struct dm_target *ti)
 	ci->sector_count = 0;
 }
 
-static int __clone_and_map_discard(struct clone_info *ci)
+typedef unsigned (*get_num_requests_fn)(struct dm_target *ti);
+
+static unsigned get_num_discard_requests(struct dm_target *ti)
+{
+	return ti->num_discard_requests;
+}
+
+static unsigned get_num_write_same_requests(struct dm_target *ti)
+{
+	return ti->num_write_same_requests;
+}
+
+typedef bool (*is_split_required_fn)(struct dm_target *ti);
+
+static bool is_split_required_for_discard(struct dm_target *ti)
+{
+	return ti->split_discard_requests;
+}
+
+static int __clone_and_map_changing_extent_only(struct clone_info *ci,
+						get_num_requests_fn get_num_requests,
+						is_split_required_fn is_split_required)
 {
 	struct dm_target *ti;
 	sector_t len;
+	unsigned num_requests;
 
 	do {
 		ti = dm_table_find_target(ci->map, ci->sector);
@@ -1179,25 +1194,37 @@ static int __clone_and_map_discard(struct clone_info *ci)
 			return -EIO;
 
 		/*
-		 * Even though the device advertised discard support,
-		 * that does not mean every target supports it, and
+		 * Even though the device advertised support for this type of
+		 * request, that does not mean every target supports it, and
 		 * reconfiguration might also have changed that since the
 		 * check was performed.
 		 */
-		if (!ti->num_discard_requests)
+		num_requests = get_num_requests ? get_num_requests(ti) : 0;
+		if (!num_requests)
 			return -EOPNOTSUPP;
 
-		if (!ti->split_discard_requests)
+		if (is_split_required && !is_split_required(ti))
 			len = min(ci->sector_count, max_io_len_target_boundary(ci->sector, ti));
 		else
 			len = min(ci->sector_count, max_io_len(ci->sector, ti));
 
-		__issue_target_requests(ci, ti, ti->num_discard_requests, len);
+		__issue_target_requests(ci, ti, num_requests, len);
 
 		ci->sector += len;
 	} while (ci->sector_count -= len);
 
 	return 0;
+}
+
+static int __clone_and_map_discard(struct clone_info *ci)
+{
+	return __clone_and_map_changing_extent_only(ci, get_num_discard_requests,
+						    is_split_required_for_discard);
+}
+
+static int __clone_and_map_write_same(struct clone_info *ci)
+{
+	return __clone_and_map_changing_extent_only(ci, get_num_write_same_requests, NULL);
 }
 
 static int __clone_and_map(struct clone_info *ci)
@@ -1209,6 +1236,8 @@ static int __clone_and_map(struct clone_info *ci)
 
 	if (unlikely(bio->bi_rw & REQ_DISCARD))
 		return __clone_and_map_discard(ci);
+	else if (unlikely(bio->bi_rw & REQ_WRITE_SAME))
+		return __clone_and_map_write_same(ci);
 
 	ti = dm_table_find_target(ci->map, ci->sector);
 	if (!dm_target_is_valid(ti))
@@ -1725,62 +1754,38 @@ static void free_minor(int minor)
  */
 static int specific_minor(int minor)
 {
-	int r, m;
+	int r;
 
 	if (minor >= (1 << MINORBITS))
 		return -EINVAL;
 
-	r = idr_pre_get(&_minor_idr, GFP_KERNEL);
-	if (!r)
-		return -ENOMEM;
-
+	idr_preload(GFP_KERNEL);
 	spin_lock(&_minor_lock);
 
-	if (idr_find(&_minor_idr, minor)) {
-		r = -EBUSY;
-		goto out;
-	}
+	r = idr_alloc(&_minor_idr, MINOR_ALLOCED, minor, minor + 1, GFP_NOWAIT);
 
-	r = idr_get_new_above(&_minor_idr, MINOR_ALLOCED, minor, &m);
-	if (r)
-		goto out;
-
-	if (m != minor) {
-		idr_remove(&_minor_idr, m);
-		r = -EBUSY;
-		goto out;
-	}
-
-out:
 	spin_unlock(&_minor_lock);
-	return r;
+	idr_preload_end();
+	if (r < 0)
+		return r == -ENOSPC ? -EBUSY : r;
+	return 0;
 }
 
 static int next_free_minor(int *minor)
 {
-	int r, m;
+	int r;
 
-	r = idr_pre_get(&_minor_idr, GFP_KERNEL);
-	if (!r)
-		return -ENOMEM;
-
+	idr_preload(GFP_KERNEL);
 	spin_lock(&_minor_lock);
 
-	r = idr_get_new(&_minor_idr, MINOR_ALLOCED, &m);
-	if (r)
-		goto out;
+	r = idr_alloc(&_minor_idr, MINOR_ALLOCED, 0, 1 << MINORBITS, GFP_NOWAIT);
 
-	if (m >= (1 << MINORBITS)) {
-		idr_remove(&_minor_idr, m);
-		r = -ENOSPC;
-		goto out;
-	}
-
-	*minor = m;
-
-out:
 	spin_unlock(&_minor_lock);
-	return r;
+	idr_preload_end();
+	if (r < 0)
+		return r;
+	*minor = r;
+	return 0;
 }
 
 static const struct block_device_operations dm_blk_dops;
@@ -1940,13 +1945,20 @@ static void free_dev(struct mapped_device *md)
 
 static void __bind_mempools(struct mapped_device *md, struct dm_table *t)
 {
-	struct dm_md_mempools *p;
+	struct dm_md_mempools *p = dm_table_get_md_mempools(t);
 
-	if (md->io_pool && (md->tio_pool || dm_table_get_type(t) == DM_TYPE_BIO_BASED) && md->bs)
-		/* the md already has necessary mempools */
+	if (md->io_pool && (md->tio_pool || dm_table_get_type(t) == DM_TYPE_BIO_BASED) && md->bs) {
+		/*
+		 * The md already has necessary mempools. Reload just the
+		 * bioset because front_pad may have changed because
+		 * a different table was loaded.
+		 */
+		bioset_free(md->bs);
+		md->bs = p->bs;
+		p->bs = NULL;
 		goto out;
+	}
 
-	p = dm_table_get_md_mempools(t);
 	BUG_ON(!p || md->io_pool || md->tio_pool || md->bs);
 
 	md->io_pool = p->io_pool;
@@ -2705,13 +2717,15 @@ int dm_noflush_suspending(struct dm_target *ti)
 }
 EXPORT_SYMBOL_GPL(dm_noflush_suspending);
 
-struct dm_md_mempools *dm_alloc_md_mempools(unsigned type, unsigned integrity)
+struct dm_md_mempools *dm_alloc_md_mempools(unsigned type, unsigned integrity, unsigned per_bio_data_size)
 {
 	struct dm_md_mempools *pools = kmalloc(sizeof(*pools), GFP_KERNEL);
 	unsigned int pool_size = (type == DM_TYPE_BIO_BASED) ? 16 : MIN_IOS;
 
 	if (!pools)
 		return NULL;
+
+	per_bio_data_size = roundup(per_bio_data_size, __alignof__(struct dm_target_io));
 
 	pools->io_pool = (type == DM_TYPE_BIO_BASED) ?
 			 mempool_create_slab_pool(MIN_IOS, _io_cache) :
@@ -2728,7 +2742,7 @@ struct dm_md_mempools *dm_alloc_md_mempools(unsigned type, unsigned integrity)
 
 	pools->bs = (type == DM_TYPE_BIO_BASED) ?
 		bioset_create(pool_size,
-			      offsetof(struct dm_target_io, clone)) :
+			      per_bio_data_size + offsetof(struct dm_target_io, clone)) :
 		bioset_create(pool_size,
 			      offsetof(struct dm_rq_clone_bio_info, clone));
 	if (!pools->bs)

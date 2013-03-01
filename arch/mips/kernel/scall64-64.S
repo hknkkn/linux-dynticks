@@ -170,8 +170,8 @@ sys_call_table:
 	PTR	sys_socketpair
 	PTR	sys_setsockopt
 	PTR	sys_getsockopt
-	PTR	sys_clone			/* 5055 */
-	PTR	sys_fork
+	PTR	__sys_clone			/* 5055 */
+	PTR	__sys_fork
 	PTR	sys_execve
 	PTR	sys_exit
 	PTR	sys_wait4
@@ -422,4 +422,5 @@ sys_call_table:
 	PTR	sys_process_vm_readv
 	PTR	sys_process_vm_writev		/* 5305 */
 	PTR	sys_kcmp
+	PTR	sys_finit_module
 	.size	sys_call_table,.-sys_call_table

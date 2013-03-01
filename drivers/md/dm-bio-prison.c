@@ -106,9 +106,8 @@ static struct dm_bio_prison_cell *__search_bucket(struct hlist_head *bucket,
 						  struct dm_cell_key *key)
 {
 	struct dm_bio_prison_cell *cell;
-	struct hlist_node *tmp;
 
-	hlist_for_each_entry(cell, tmp, bucket, list)
+	hlist_for_each_entry(cell, bucket, list)
 		if (keys_equal(&cell->key, key))
 			return cell;
 
@@ -206,31 +205,6 @@ void dm_cell_release(struct dm_bio_prison_cell *cell, struct bio_list *bios)
 	spin_unlock_irqrestore(&prison->lock, flags);
 }
 EXPORT_SYMBOL_GPL(dm_cell_release);
-
-/*
- * There are a couple of places where we put a bio into a cell briefly
- * before taking it out again.  In these situations we know that no other
- * bio may be in the cell.  This function releases the cell, and also does
- * a sanity check.
- */
-static void __cell_release_singleton(struct dm_bio_prison_cell *cell, struct bio *bio)
-{
-	BUG_ON(cell->holder != bio);
-	BUG_ON(!bio_list_empty(&cell->bios));
-
-	__cell_release(cell, NULL);
-}
-
-void dm_cell_release_singleton(struct dm_bio_prison_cell *cell, struct bio *bio)
-{
-	unsigned long flags;
-	struct dm_bio_prison *prison = cell->prison;
-
-	spin_lock_irqsave(&prison->lock, flags);
-	__cell_release_singleton(cell, bio);
-	spin_unlock_irqrestore(&prison->lock, flags);
-}
-EXPORT_SYMBOL_GPL(dm_cell_release_singleton);
 
 /*
  * Sometimes we don't want the holder, just the additional bios.

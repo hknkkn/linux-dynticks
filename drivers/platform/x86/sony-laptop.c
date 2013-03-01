@@ -786,28 +786,29 @@ static int sony_nc_int_call(acpi_handle handle, char *name, int *value,
 static int sony_nc_buffer_call(acpi_handle handle, char *name, u64 *value,
 		void *buffer, size_t buflen)
 {
+	int ret = 0;
 	size_t len = len;
 	union acpi_object *object = __call_snc_method(handle, name, value);
 
 	if (!object)
 		return -EINVAL;
 
-	if (object->type == ACPI_TYPE_BUFFER)
+	if (object->type == ACPI_TYPE_BUFFER) {
 		len = MIN(buflen, object->buffer.length);
+		memcpy(buffer, object->buffer.pointer, len);
 
-	else if (object->type == ACPI_TYPE_INTEGER)
+	} else if (object->type == ACPI_TYPE_INTEGER) {
 		len = MIN(buflen, sizeof(object->integer.value));
+		memcpy(buffer, &object->integer.value, len);
 
-	else {
+	} else {
 		pr_warn("Invalid acpi_object: expected 0x%x got 0x%x\n",
 				ACPI_TYPE_BUFFER, object->type);
-		kfree(object);
-		return -EINVAL;
+		ret = -EINVAL;
 	}
 
-	memcpy(buffer, object->buffer.pointer, len);
 	kfree(object);
-	return 0;
+	return ret;
 }
 
 struct sony_nc_handles {
@@ -2739,7 +2740,7 @@ outwalk:
 	return result;
 }
 
-static int sony_nc_remove(struct acpi_device *device, int type)
+static int sony_nc_remove(struct acpi_device *device)
 {
 	struct sony_nc_value *item;
 
@@ -3565,7 +3566,7 @@ static ssize_t sonypi_misc_read(struct file *file, char __user *buf,
 	}
 
 	if (ret > 0) {
-		struct inode *inode = file->f_path.dentry->d_inode;
+		struct inode *inode = file_inode(file);
 		inode->i_atime = current_fs_time(inode->i_sb);
 	}
 
@@ -4110,7 +4111,7 @@ found:
  *  ACPI driver
  *
  *****************/
-static int sony_pic_remove(struct acpi_device *device, int type)
+static int sony_pic_remove(struct acpi_device *device)
 {
 	struct sony_pic_ioport *io, *tmp_io;
 	struct sony_pic_irq *irq, *tmp_irq;

@@ -86,12 +86,6 @@ typedef unsigned long old_sigset_t;		/* at least 32 bits */
 
 #define SA_RESTORER	0x04000000	/* Only for o32 */
 
-/*
- * sigaltstack controls
- */
-#define SS_ONSTACK     1
-#define SS_DISABLE     2
-
 #define MINSIGSTKSZ    2048
 #define SIGSTKSZ       8192
 
@@ -102,15 +96,13 @@ typedef unsigned long old_sigset_t;		/* at least 32 bits */
 
 #include <asm-generic/signal-defs.h>
 
+#ifndef __KERNEL__
 struct sigaction {
 	unsigned int	sa_flags;
 	__sighandler_t	sa_handler;
 	sigset_t	sa_mask;
 };
-
-struct k_sigaction {
-	struct sigaction sa;
-};
+#endif
 
 /* IRIX compatible stack_t  */
 typedef struct sigaltstack {
